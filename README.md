@@ -3,6 +3,7 @@
 FanBar is a macOS 14+ menu bar app that monitors CPU temperature and can apply a conservative fan safety curve through AppleSMC.
 
 Fan writes are performed by a separately signed, root LaunchDaemon registered with macOS `SMAppService`. The menu bar app remains unprivileged and communicates with the helper over an authenticated XPC connection.
+<img width="531" height="705" alt="image" src="https://github.com/user-attachments/assets/9cb25622-464f-4c1c-96c3-43c5edd4bcae" />
 
 ## Safety behavior
 
