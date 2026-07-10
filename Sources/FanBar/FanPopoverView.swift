@@ -282,11 +282,11 @@ private struct SensorGroupSummary: View {
         .frame(width: 16).foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 2) {
         Text(group.category.label).font(.caption)
-        Text("\(group.readings.count) 项 · 平均 \(Int(group.average.rounded()))°")
+        Text("\(group.readings.count) 个传感器")
           .font(.caption2).foregroundStyle(.secondary)
       }
       Spacer(minLength: 3)
-      Text("\(Int(group.maximum.rounded()))°")
+      Text("\(Int(group.average.rounded()))°")
         .font(.caption.monospacedDigit()).fontWeight(.medium)
     }
     .padding(7)

@@ -152,13 +152,17 @@ struct CPUTemperatureSelectionTests {
     let readings = [
       TemperatureReading(key: "TCMz", value: 82),
       TemperatureReading(key: "Tg04", value: 55),
+      TemperatureReading(key: "TB0T", value: 33),
       TemperatureReading(key: "TMVR", value: 48),
+      TemperatureReading(key: "Tf46", value: 90),
       TemperatureReading(key: "Ta00", value: 0),
     ]
     let groups = TemperatureSensorGroup.make(from: readings)
-    #expect(groups.flatMap(\.readings).count == 3)
+    #expect(groups.flatMap(\.readings).count == 4)
     #expect(groups.first { $0.category == .cpu }?.maximum == 82)
     #expect(groups.first { $0.category == .gpu }?.average == 55)
+    #expect(groups.first { $0.category == .battery }?.average == 33)
+    #expect(!groups.flatMap(\.readings).contains { $0.key == "Tf46" })
   }
 }
 

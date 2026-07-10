@@ -24,6 +24,7 @@ struct TemperatureSensorGroup: Identifiable, Equatable {
     case cpu
     case soc
     case gpu
+    case battery
     case memory
     case enclosure
     case other
@@ -33,6 +34,7 @@ struct TemperatureSensorGroup: Identifiable, Equatable {
       case .cpu: "CPU 与核心"
       case .soc: "SoC 与芯片"
       case .gpu: "GPU"
+      case .battery: "电池温度"
       case .memory: "内存与供电"
       case .enclosure: "机身与接口"
       case .other: "其他"
@@ -44,6 +46,7 @@ struct TemperatureSensorGroup: Identifiable, Equatable {
       case .cpu: "cpu"
       case .soc: "square.stack.3d.up"
       case .gpu: "display"
+      case .battery: "battery.75percent"
       case .memory: "memorychip"
       case .enclosure: "macstudio"
       case .other: "sensor"
@@ -61,7 +64,9 @@ struct TemperatureSensorGroup: Identifiable, Equatable {
   var maximum: Double { readings.map(\.value).max() ?? 0 }
 
   static func make(from readings: [TemperatureReading]) -> [TemperatureSensorGroup] {
-    let valid = readings.filter { $0.value.isFinite && (10...125).contains($0.value) }
+    let valid = readings.filter {
+      $0.value.isFinite && (10...125).contains($0.value) && !$0.key.hasPrefix("Tf")
+    }
     return Category.allCases.compactMap { category in
       let values = valid.filter { categoryForKey($0.key) == category }.sorted { $0.key < $1.key }
       return values.isEmpty ? nil : TemperatureSensorGroup(category: category, readings: values)
@@ -70,19 +75,18 @@ struct TemperatureSensorGroup: Identifiable, Equatable {
 
   private static func categoryForKey(_ key: String) -> Category {
     if key.hasPrefix("Tg") { return .gpu }
+    if key.hasPrefix("TB") { return .battery }
     if key.hasPrefix("TM") || key.hasPrefix("TV") { return .memory }
     if key.hasPrefix("Ts") || key.hasPrefix("TPD") || key.hasPrefix("TRD")
       || key == "TPMP" || key == "TPSP"
     {
       return .soc
     }
-    if key.hasPrefix("TC") || key.hasPrefix("Tp") || key.hasPrefix("Te")
-      || key.hasPrefix("Tf")
-    {
+    if key.hasPrefix("TC") || key.hasPrefix("Tp") || key.hasPrefix("Te") {
       return .cpu
     }
-    if key.hasPrefix("TA") || key.hasPrefix("Ta") || key.hasPrefix("TB")
-      || key.hasPrefix("TD") || key.hasPrefix("TH") || key.hasPrefix("TW")
+    if key.hasPrefix("TA") || key.hasPrefix("Ta") || key.hasPrefix("TD")
+      || key.hasPrefix("TH") || key.hasPrefix("TW")
     {
       return .enclosure
     }
