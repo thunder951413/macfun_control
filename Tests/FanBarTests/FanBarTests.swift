@@ -17,11 +17,13 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   var resetCount = 0
   var automaticWriteCount = 0
   var overrideActive = false
+  var sensorReadings: [TemperatureReading] = []
 
   func open() throws { isOpen = true }
   func close() { isOpen = false }
   func fanCount() throws -> Int { count }
   func cpuTemperature() throws -> Double { temperature }
+  func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
   func fanActualRPM(fan index: Int) throws -> Double { actual[index] }
   func fanMinimumRPM(fan index: Int) throws -> Double { minimum[index] }
   func fanMaximumRPM(fan index: Int) throws -> Double { maximum[index] }
@@ -143,6 +145,20 @@ struct CPUTemperatureSelectionTests {
   func robustAverageTrimsOutliers() throws {
     let values = [0.0] + Array(repeating: 50.0, count: 8) + [100.0]
     #expect(try #require(SMCClient.robustAverage(values)) == 50)
+  }
+
+  @Test("sensor dashboard filters invalid readings and groups known families")
+  func sensorGroups() throws {
+    let readings = [
+      TemperatureReading(key: "TCMz", value: 82),
+      TemperatureReading(key: "Tg04", value: 55),
+      TemperatureReading(key: "TMVR", value: 48),
+      TemperatureReading(key: "Ta00", value: 0),
+    ]
+    let groups = TemperatureSensorGroup.make(from: readings)
+    #expect(groups.flatMap(\.readings).count == 3)
+    #expect(groups.first { $0.category == .cpu }?.maximum == 82)
+    #expect(groups.first { $0.category == .gpu }?.average == 55)
   }
 }
 

@@ -29,6 +29,7 @@ final class FanController: ObservableObject {
   @Published private(set) var isControlEnabled: Bool
   @Published private(set) var currentTemperature: Double?
   @Published private(set) var currentHotspotTemperature: Double?
+  @Published private(set) var temperatureDashboard = TemperatureDashboard.empty
   @Published private(set) var fanReadings: [FanReading] = []
   @Published private(set) var targetRPMs: [Double] = []
   @Published private(set) var state: ControlState = .starting
@@ -52,6 +53,7 @@ final class FanController: ObservableObject {
   private var needsRecovery: Bool
   private var consecutiveCoolSamples = 0
   private var temperatureFilter = TemperatureSafetyFilter()
+  private var dashboardRefreshCountdown = 0
 
   init(
     service: FanService = FanService(),
@@ -190,6 +192,14 @@ final class FanController: ObservableObject {
       currentTemperature = filteredTemperature
       currentHotspotTemperature = rawSnapshot.hotspotTemperature
       fanReadings = rawSnapshot.fans
+      if dashboardRefreshCountdown <= 0 {
+        if let dashboard = try? await service.temperatureDashboard() {
+          temperatureDashboard = dashboard
+        }
+        dashboardRefreshCountdown = 5
+      } else {
+        dashboardRefreshCountdown -= 1
+      }
 
       if needsRecovery {
         logger.notice("restore requested reason=unfinished-session")

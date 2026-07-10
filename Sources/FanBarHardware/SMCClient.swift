@@ -8,6 +8,18 @@ public enum CPUTemperatureSource: String, CaseIterable, Sendable {
   case hotspot
 }
 
+public struct TemperatureReading: Sendable, Equatable, Identifiable {
+  public let key: String
+  public let value: Double
+
+  public var id: String { key }
+
+  public init(key: String, value: Double) {
+    self.key = key
+    self.value = value
+  }
+}
+
 public protocol FanHardware: Sendable {
   var isOpen: Bool { get }
   func open() throws
@@ -15,6 +27,7 @@ public protocol FanHardware: Sendable {
   func fanCount() throws -> Int
   func cpuTemperature() throws -> Double
   func cpuTemperature(source: CPUTemperatureSource) throws -> Double
+  func allTemperatureReadings() -> [TemperatureReading]
   func fanActualRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
   func fanMaximumRPM(fan index: Int) throws -> Double
@@ -30,19 +43,11 @@ extension FanHardware {
   public func cpuTemperature(source: CPUTemperatureSource) throws -> Double {
     try cpuTemperature()
   }
+
+  public func allTemperatureReadings() -> [TemperatureReading] { [] }
 }
 
 public final class SMCClient: FanHardware, @unchecked Sendable {
-  public struct TemperatureReading: Sendable, Equatable {
-    public let key: String
-    public let value: Double
-
-    public init(key: String, value: Double) {
-      self.key = key
-      self.value = value
-    }
-  }
-
   public enum SMCError: LocalizedError, Equatable {
     case serviceNotFound
     case connectionFailed(kern_return_t)

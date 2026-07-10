@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     updateStatusItem()
 
     popover.behavior = .transient
-    popover.contentSize = NSSize(width: 460, height: 590)
+    popover.contentSize = NSSize(width: 520, height: 700)
     popover.contentViewController = NSHostingController(
       rootView: FanPopoverView(controller: controller))
 

@@ -24,6 +24,8 @@ struct FanPopoverView: View {
       VStack(alignment: .leading, spacing: 14) {
         header
         metrics
+        temperatureOverview
+        sensorTemperatures
         Divider()
         menuBarSettings
         Divider()
@@ -34,7 +36,7 @@ struct FanPopoverView: View {
       }
       .padding(18)
     }
-    .frame(width: 460, height: 590)
+    .frame(width: 520, height: 700)
   }
 
   private var header: some View {
@@ -65,11 +67,9 @@ struct FanPopoverView: View {
   private var metrics: some View {
     VStack(spacing: 9) {
       HStack {
-        Label(
-          "CPU \(controller.temperatureSource.shortLabel) \(controller.temperatureText)",
-          systemImage: "thermometer.medium")
+        Label("风扇状态", systemImage: "fan")
         Spacer()
-        Label(controller.fanText, systemImage: "fan")
+        Text(controller.fanText).monospacedDigit()
       }
       HStack {
         Text("目标转速").foregroundStyle(.secondary)
@@ -81,6 +81,62 @@ struct FanPopoverView: View {
       .font(.caption)
     }
     .font(.callout)
+  }
+
+  private var temperatureOverview: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Label("主要温度", systemImage: "thermometer.medium")
+          .font(.callout).fontWeight(.medium)
+        Spacer()
+        Text("控制依据：\(controller.temperatureSource.shortLabel)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
+      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+        TemperatureMetricCard(
+          title: "CPU 封装", value: dashboardValue(.package),
+          isControlSource: controller.temperatureSource == .package)
+        TemperatureMetricCard(
+          title: "核心平均", value: dashboardValue(.coreAverage),
+          isControlSource: controller.temperatureSource == .coreAverage)
+        TemperatureMetricCard(
+          title: "最高热点", value: dashboardValue(.hotspot),
+          isControlSource: controller.temperatureSource == .hotspot)
+      }
+    }
+  }
+
+  private var sensorTemperatures: some View {
+    let groups = TemperatureSensorGroup.make(from: controller.temperatureDashboard.readings)
+    return VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Label("其他传感器", systemImage: "sensor.tag.radiowaves.forward")
+          .font(.callout).fontWeight(.medium)
+        Spacer()
+        Text("\(groups.flatMap(\.readings).count) 个有效读数")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+
+      if groups.isEmpty {
+        Text("正在读取 SMC 传感器…")
+          .font(.caption).foregroundStyle(.secondary)
+      } else {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+          ForEach(groups) { group in
+            SensorGroupSummary(group: group)
+          }
+        }
+
+      }
+    }
+  }
+
+  private func dashboardValue(_ source: CPUTemperatureSource) -> Double? {
+    if let value = controller.temperatureDashboard.value(for: source) { return value }
+    if source == controller.temperatureSource { return controller.currentTemperature }
+    if source == .hotspot { return controller.currentHotspotTemperature }
+    return nil
   }
 
   private var menuBarSettings: some View {
@@ -187,6 +243,54 @@ struct FanPopoverView: View {
     )
     .font(.caption)
     .foregroundStyle(.secondary)
+  }
+}
+
+private struct TemperatureMetricCard: View {
+  let title: String
+  let value: Double?
+  let isControlSource: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 4) {
+        Text(title).font(.caption).foregroundStyle(.secondary)
+        Spacer(minLength: 2)
+        if isControlSource {
+          Text("控制").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange)
+        }
+      }
+      Text(value.map { "\(Int($0.rounded()))°C" } ?? "--°C")
+        .font(.system(.title3, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
+    }
+    .padding(9)
+    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(isControlSource ? Color.orange.opacity(0.8) : .clear, lineWidth: 1)
+    }
+  }
+}
+
+private struct SensorGroupSummary: View {
+  let group: TemperatureSensorGroup
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Image(systemName: group.category.symbol)
+        .frame(width: 16).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(group.category.label).font(.caption)
+        Text("\(group.readings.count) 项 · 平均 \(Int(group.average.rounded()))°")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 3)
+      Text("\(Int(group.maximum.rounded()))°")
+        .font(.caption.monospacedDigit()).fontWeight(.medium)
+    }
+    .padding(7)
+    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
   }
 }
 

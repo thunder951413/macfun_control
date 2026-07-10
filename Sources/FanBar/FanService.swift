@@ -62,6 +62,16 @@ actor FanService {
     return FanSnapshot(temperature: temperature, hotspotTemperature: hotspot, fans: fans)
   }
 
+  func temperatureDashboard() throws -> TemperatureDashboard {
+    if !hardware.isOpen { try hardware.open() }
+    let package = try? hardware.cpuTemperature(source: .package)
+    let coreAverage = try? hardware.cpuTemperature(source: .coreAverage)
+    let hotspot = try? hardware.cpuTemperature(source: .hotspot)
+    let readings = hardware.allTemperatureReadings()
+    return TemperatureDashboard(
+      package: package, coreAverage: coreAverage, hotspot: hotspot, readings: readings)
+  }
+
   func apply(targets: [Double], snapshot: FanSnapshot) throws {
     guard targets.count == count, snapshot.fans.count == count else {
       throw FanServiceError.targetCountMismatch
