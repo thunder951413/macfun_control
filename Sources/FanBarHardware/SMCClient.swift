@@ -1,5 +1,6 @@
 import Foundation
-@preconcurrency import IOKit
+import FanBarC
+import IOKit
 
 public enum CPUTemperatureSource: String, CaseIterable, Sendable {
   case package
@@ -160,7 +161,7 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     defer { IOObjectRelease(service) }
 
     var newConnection: io_connect_t = 0
-    let result = IOServiceOpen(service, mach_task_self_, 0, &newConnection)
+    let result = IOServiceOpen(service, fanbar_mach_task_self(), 0, &newConnection)
     guard result == kIOReturnSuccess else { throw SMCError.connectionFailed(result) }
     connection = newConnection
 

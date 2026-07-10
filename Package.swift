@@ -12,8 +12,10 @@ let package = Package(
     .executable(name: "FanBarHelper", targets: ["FanBarHelper"]),
   ],
   targets: [
+    .target(name: "FanBarC"),
     .target(
       name: "FanBarHardware",
+      dependencies: ["FanBarC"],
       linkerSettings: [
         .linkedFramework("IOKit")
       ]
