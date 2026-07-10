@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the v prefix
+        required: true
+        default: 1.0.0
+      tag:
+        description: Git tag to create
+        required: true
+        default: v1.0.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ inputs.version }}
+      TAG: ${{ inputs.tag }}
+      P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+      P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release inputs and secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$TAG" == "v$VERSION" ]]
+          for name in P12_BASE64 P12_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            [[ -n "${!name:-}" ]] || { echo "Required secret is missing: $name" >&2; exit 1; }
+          done
+          if git rev-parse "$TAG" >/dev/null 2>&1 || gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Tag or release already exists: $TAG" >&2
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/fanbar-signing.keychain-db"
+          CERTIFICATE="$RUNNER_TEMP/developer-id.p12"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$CERTIFICATE"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERTIFICATE" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Developer ID Application/ {print $2; exit}')"
+          [[ -n "$IDENTITY" ]] || { echo "P12 does not contain a Developer ID Application identity" >&2; exit 1; }
+          echo "FANBAR_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: swift test
+
+      - name: Build and sign Universal app
+        env:
+          FANBAR_VERSION: ${{ inputs.version }}
+          FANBAR_BUILD_NUMBER: ${{ github.run_number }}
+        run: Scripts/build-app.sh
+
+      - name: Verify signature
+        run: |
+          codesign --verify --deep --strict --verbose=2 .build/app/FanBar.app
+          codesign -dv --verbose=4 .build/app/FanBar.app 2>&1 | grep 'Authority=Developer ID Application'
+          test "$(lipo -archs .build/app/FanBar.app/Contents/MacOS/FanBar)" = "x86_64 arm64" || \
+            test "$(lipo -archs .build/app/FanBar.app/Contents/MacOS/FanBar)" = "arm64 x86_64"
+
+      - name: Notarize and staple
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent .build/app/FanBar.app "$RUNNER_TEMP/FanBar-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/FanBar-notarization.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple .build/app/FanBar.app
+          xcrun stapler validate .build/app/FanBar.app
+
+      - name: Package and publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARCHIVE="FanBar-$VERSION-universal.zip"
+          ditto -c -k --keepParent .build/app/FanBar.app "$ARCHIVE"
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+          gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" \
+            --title "FanBar $VERSION" --generate-notes --verify-tag
+
