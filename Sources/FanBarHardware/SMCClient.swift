@@ -1,5 +1,5 @@
 import Foundation
-import IOKit
+@preconcurrency import IOKit
 
 public enum CPUTemperatureSource: String, CaseIterable, Sendable {
   case package
