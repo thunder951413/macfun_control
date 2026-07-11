@@ -26,14 +26,21 @@ struct FanPopoverView: View {
         .padding(.top, 16)
         .padding(.bottom, 10)
       Divider()
-      TabView {
+      TabView(
+        selection: Binding(
+          get: { controller.selectedPopoverTab },
+          set: { controller.setPopoverTab($0) }
+        )
+      ) {
         sensorTab
+          .tag(PopoverTab.sensors)
           .tabItem { Label("传感器", systemImage: "thermometer.medium") }
         settingsTab
+          .tag(PopoverTab.settings)
           .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
       }
     }
-    .frame(width: 520, height: 700)
+    .frame(width: 520, height: controller.preferredPopoverHeight)
   }
 
   private var sensorTab: some View {

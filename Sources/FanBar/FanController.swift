@@ -40,6 +40,7 @@ final class FanController: ObservableObject {
   @Published private(set) var statusText = "正在连接 AppleSMC…"
   @Published private(set) var menuBarDisplayMode: MenuBarDisplayMode
   @Published private(set) var temperatureSource: CPUTemperatureSource
+  @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   let helperManager: PrivilegedHelperManager
 
   private static let thresholdKey = "thresholdCelsius"
@@ -136,9 +137,18 @@ final class FanController: ObservableObject {
     return Int((fraction * 100).rounded())
   }
 
+  var preferredPopoverHeight: Double {
+    let groupCount = TemperatureSensorGroup.make(from: temperatureDashboard.readings).count
+    return selectedPopoverTab.preferredHeight(sensorGroupCount: groupCount)
+  }
+
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
     menuBarDisplayMode = mode
     UserDefaults.standard.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
+  }
+
+  func setPopoverTab(_ tab: PopoverTab) {
+    selectedPopoverTab = tab
   }
 
   func setTemperatureSource(_ source: CPUTemperatureSource) {

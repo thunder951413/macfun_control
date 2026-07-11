@@ -19,6 +19,21 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
   }
 }
 
+enum PopoverTab: String, Hashable {
+  case sensors
+  case settings
+
+  func preferredHeight(sensorGroupCount: Int) -> Double {
+    switch self {
+    case .sensors:
+      let rows = max(1, Int(ceil(Double(sensorGroupCount) / 2)))
+      return min(620, max(390, 220 + Double(rows) * 68))
+    case .settings:
+      return 640
+    }
+  }
+}
+
 extension CPUTemperatureSource: Identifiable {
   public var id: String { rawValue }
 

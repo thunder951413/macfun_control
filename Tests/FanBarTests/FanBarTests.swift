@@ -169,6 +169,16 @@ struct MenuBarDisplayModeTests {
     #expect(FanController.ControlState.monitoring.menuBarSymbolName == "fan")
     #expect(FanController.ControlState.error.menuBarSymbolName == "fan")
   }
+
+  @Test("popover height adapts to tab and sensor rows")
+  func popoverHeightAdapts() {
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 390)
+    #expect(
+      PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
+        > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
+    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 640)
+  }
 }
 
 @Suite("CPU temperature selection")

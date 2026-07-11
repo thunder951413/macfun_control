@@ -23,12 +23,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       button.target = self
     }
     statusObserver = controller.objectWillChange.sink { [weak self] in
-      DispatchQueue.main.async { self?.updateStatusItem() }
+      DispatchQueue.main.async {
+        self?.updateStatusItem()
+        self?.updatePopoverSize()
+      }
     }
     updateStatusItem()
 
     popover.behavior = .transient
-    popover.contentSize = NSSize(width: 520, height: 700)
+    popover.contentSize = NSSize(width: 520, height: controller.preferredPopoverHeight)
     popover.contentViewController = NSHostingController(
       rootView: FanPopoverView(controller: controller))
 
@@ -86,6 +89,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     button.title = controller.menuBarText
     button.imagePosition = controller.menuBarText.isEmpty ? .imageOnly : .imageLeading
     button.toolTip = "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
+  }
+
+  private func updatePopoverSize() {
+    let desiredSize = NSSize(width: 520, height: controller.preferredPopoverHeight)
+    guard popover.contentSize != desiredSize else { return }
+    popover.contentSize = desiredSize
   }
 }
 
