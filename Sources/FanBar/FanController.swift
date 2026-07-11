@@ -59,6 +59,7 @@ final class FanController: ObservableObject {
   private var needsRecovery: Bool
   private var consecutiveCoolSamples = 0
   private var temperatureFilter = TemperatureSafetyFilter()
+  private var emergencyGate = ThermalEmergencyGate()
   private var dashboardRefreshCountdown = 0
 
   init(
@@ -181,6 +182,7 @@ final class FanController: ObservableObject {
       return
     }
     isControlEnabled = enabled
+    if !enabled { emergencyGate.reset() }
     UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
     Task {
       if enabled {
@@ -236,7 +238,13 @@ final class FanController: ObservableObject {
       }
 
       let wasManual = await service.isManual()
-      switch policy.decision(for: snapshot, threshold: thresholdCelsius, wasManual: wasManual) {
+      let emergency = emergencyGate.evaluate(
+        controlTemperature: rawSnapshot.temperature,
+        hotspotTemperature: rawSnapshot.hotspotTemperature)
+      switch policy.decision(
+        for: snapshot, threshold: thresholdCelsius, wasManual: wasManual,
+        emergencyOverride: emergency)
+      {
       case .automatic:
         if wasManual {
           consecutiveCoolSamples += 1
@@ -261,7 +269,7 @@ final class FanController: ObservableObject {
         setSessionActive(true)
         let limitedTargets = slewLimiter.limit(
           desired: targets, previous: targetRPMs, fans: snapshot.fans,
-          interval: pollInterval, bypass: policy.isEmergency(snapshot))
+          interval: pollInterval, bypass: emergency)
         try await service.apply(targets: limitedTargets, snapshot: snapshot)
         logger.notice(
           "manual curve applied temperature=\(snapshot.temperature, privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
@@ -269,8 +277,7 @@ final class FanController: ObservableObject {
         targetRPMs = limitedTargets
         state = .manual
         statusText =
-          snapshot.temperature >= policy.emergencyTemperature
-            || (snapshot.hotspotTemperature ?? 0) >= policy.emergencyHotspotTemperature
+          emergency
           ? "紧急散热：已请求最大转速"
           : "智能风扇曲线正在运行"
       }
@@ -313,6 +320,7 @@ final class FanController: ObservableObject {
   func suspend() async {
     isSuspended = true
     temperatureFilter.reset()
+    emergencyGate.reset()
     timer?.invalidate()
     timer = nil
     await restoreForSafety(
@@ -329,6 +337,7 @@ final class FanController: ObservableObject {
   func shutdown() async -> Bool {
     isSuspended = true
     temperatureFilter.reset()
+    emergencyGate.reset()
     timer?.invalidate()
     timer = nil
     if let error = await attemptSafetyRestore() {
