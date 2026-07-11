@@ -68,81 +68,16 @@ struct FanTargetSlewLimiter: Sendable {
   }
 }
 
-struct ThermalEmergencyGate: Sendable {
-  let hotspotThreshold: Double
-  let immediateHotspotThreshold: Double
-  let releaseThreshold: Double
-  let requiredHotSamples: Int
-  let requiredCoolSamples: Int
-
-  private(set) var isActive = false
-  private var hotSamples = 0
-  private var coolSamples = 0
-
-  init(
-    hotspotThreshold: Double = 90, immediateHotspotThreshold: Double = 100,
-    releaseThreshold: Double = 85, requiredHotSamples: Int = 2,
-    requiredCoolSamples: Int = 2
-  ) {
-    self.hotspotThreshold = hotspotThreshold
-    self.immediateHotspotThreshold = immediateHotspotThreshold
-    self.releaseThreshold = releaseThreshold
-    self.requiredHotSamples = max(1, requiredHotSamples)
-    self.requiredCoolSamples = max(1, requiredCoolSamples)
-  }
-
-  mutating func evaluate(controlTemperature: Double, hotspotTemperature: Double?) -> Bool {
-    let hotspot = hotspotTemperature ?? -.infinity
-    if controlTemperature >= hotspotThreshold || hotspot >= immediateHotspotThreshold {
-      isActive = true
-      hotSamples = requiredHotSamples
-      coolSamples = 0
-      return true
-    }
-
-    if hotspot >= hotspotThreshold {
-      hotSamples += 1
-      coolSamples = 0
-      if hotSamples >= requiredHotSamples { isActive = true }
-      return isActive
-    }
-
-    hotSamples = 0
-    guard isActive else { return false }
-    if controlTemperature < releaseThreshold && hotspot < releaseThreshold {
-      coolSamples += 1
-      if coolSamples >= requiredCoolSamples {
-        isActive = false
-        coolSamples = 0
-      }
-    } else {
-      coolSamples = 0
-    }
-    return isActive
-  }
-
-  mutating func reset() {
-    isActive = false
-    hotSamples = 0
-    coolSamples = 0
-  }
-}
-
 struct FanSafetyPolicy: Sendable {
   static let thresholdRange = 55.0...80.0
   static let defaultThreshold = 68.0
 
   let hysteresis: Double
   let emergencyTemperature: Double
-  let emergencyHotspotTemperature: Double
 
-  init(
-    hysteresis: Double = 3, emergencyTemperature: Double = 90,
-    emergencyHotspotTemperature: Double = 90
-  ) {
+  init(hysteresis: Double = 3, emergencyTemperature: Double = 90) {
     self.hysteresis = hysteresis
     self.emergencyTemperature = emergencyTemperature
-    self.emergencyHotspotTemperature = emergencyHotspotTemperature
   }
 
   enum Decision: Equatable {
@@ -152,7 +87,6 @@ struct FanSafetyPolicy: Sendable {
 
   func isEmergency(_ snapshot: FanSnapshot) -> Bool {
     snapshot.temperature >= emergencyTemperature
-      || (snapshot.hotspotTemperature ?? -.infinity) >= emergencyHotspotTemperature
   }
 
   func curveFraction(temperature: Double, threshold: Double) -> Double? {

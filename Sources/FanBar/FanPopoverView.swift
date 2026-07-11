@@ -249,7 +249,7 @@ struct FanPopoverView: View {
           ), in: FanSafetyPolicy.thresholdRange, step: 1
         )
         .accessibilityLabel("开始加速温度")
-        Text("普通升速每 2 秒最多 500 rpm、降速最多 200 rpm。控制温度 90°C 或热点 100°C 时立即满速；热点 90–99°C 连续两次才触发，避免瞬时尖峰。")
+        Text("FanBar 只依据所选温度来源补充 macOS 控制。普通升速每 2 秒最多 500 rpm、降速最多 200 rpm；所选温度达到 90°C 时立即满速。")
           .font(.caption)
           .foregroundStyle(.secondary)
       }

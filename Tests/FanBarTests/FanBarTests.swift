@@ -110,13 +110,13 @@ struct FanSafetyPolicyTests {
     #expect(filter.record(52) == 53)
   }
 
-  @Test("90°C hotspot emergency overrides a cool package temperature")
-  func hotspotEmergencyOverridesPackage() throws {
+  @Test("unselected hotspot does not override a cool control temperature")
+  func unselectedHotspotDoesNotControl() {
     let fan = FanReading(index: 0, actualRPM: 2_000, minimumRPM: 1_800, maximumRPM: 6_500)
     let decision = policy.decision(
-      for: FanSnapshot(temperature: 53, hotspotTemperature: 90, fans: [fan]),
+      for: FanSnapshot(temperature: 53, hotspotTemperature: 110, fans: [fan]),
       threshold: 68, wasManual: false)
-    #expect(try #require(manualTargets(decision)) == [6_500])
+    #expect(decision == .automatic)
   }
 
   @Test("slew limiter raises faster than it lowers")
@@ -143,37 +143,6 @@ struct FanSafetyPolicyTests {
         == [6_000])
   }
 
-  @Test("single 90°C hotspot spike does not trigger emergency")
-  func emergencyGateRejectsSingleSpike() {
-    var gate = ThermalEmergencyGate()
-    let spike = gate.evaluate(controlTemperature: 45, hotspotTemperature: 92)
-    let recovered = gate.evaluate(controlTemperature: 45, hotspotTemperature: 60)
-    #expect(!spike)
-    #expect(!recovered)
-  }
-
-  @Test("sustained 90°C hotspot triggers and cool samples release emergency")
-  func emergencyGateDebouncesHotspot() {
-    var gate = ThermalEmergencyGate()
-    let firstHot = gate.evaluate(controlTemperature: 45, hotspotTemperature: 92)
-    let secondHot = gate.evaluate(controlTemperature: 45, hotspotTemperature: 91)
-    let firstCool = gate.evaluate(controlTemperature: 45, hotspotTemperature: 84)
-    let secondCool = gate.evaluate(controlTemperature: 45, hotspotTemperature: 83)
-    #expect(!firstHot)
-    #expect(secondHot)
-    #expect(firstCool)
-    #expect(!secondCool)
-  }
-
-  @Test("100°C hotspot or 90°C control temperature triggers immediately")
-  func emergencyGateImmediateThresholds() {
-    var hotspotGate = ThermalEmergencyGate()
-    let hotspotEmergency = hotspotGate.evaluate(controlTemperature: 45, hotspotTemperature: 100)
-    var controlGate = ThermalEmergencyGate()
-    let controlEmergency = controlGate.evaluate(controlTemperature: 90, hotspotTemperature: 60)
-    #expect(hotspotEmergency)
-    #expect(controlEmergency)
-  }
 
   @Test("curve preview maps threshold to zero and 90°C to maximum")
   func curvePreviewFractions() {

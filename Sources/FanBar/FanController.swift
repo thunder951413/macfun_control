@@ -59,7 +59,6 @@ final class FanController: ObservableObject {
   private var needsRecovery: Bool
   private var consecutiveCoolSamples = 0
   private var temperatureFilter = TemperatureSafetyFilter()
-  private var emergencyGate = ThermalEmergencyGate()
   private var dashboardRefreshCountdown = 0
 
   init(
@@ -182,7 +181,6 @@ final class FanController: ObservableObject {
       return
     }
     isControlEnabled = enabled
-    if !enabled { emergencyGate.reset() }
     UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
     Task {
       if enabled {
@@ -238,9 +236,9 @@ final class FanController: ObservableObject {
       }
 
       let wasManual = await service.isManual()
-      let emergency = emergencyGate.evaluate(
-        controlTemperature: rawSnapshot.temperature,
-        hotspotTemperature: rawSnapshot.hotspotTemperature)
+      // FanBar supplements macOS and only controls from the user-selected
+      // temperature source. Other sensors remain monitoring-only.
+      let emergency = rawSnapshot.temperature >= policy.emergencyTemperature
       switch policy.decision(
         for: snapshot, threshold: thresholdCelsius, wasManual: wasManual,
         emergencyOverride: emergency)
@@ -320,7 +318,6 @@ final class FanController: ObservableObject {
   func suspend() async {
     isSuspended = true
     temperatureFilter.reset()
-    emergencyGate.reset()
     timer?.invalidate()
     timer = nil
     await restoreForSafety(
@@ -337,7 +334,6 @@ final class FanController: ObservableObject {
   func shutdown() async -> Bool {
     isSuspended = true
     temperatureFilter.reset()
-    emergencyGate.reset()
     timer?.invalidate()
     timer = nil
     if let error = await attemptSafetyRestore() {
