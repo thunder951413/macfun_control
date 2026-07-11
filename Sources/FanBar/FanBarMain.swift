@@ -86,9 +86,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       ?? NSImage(systemSymbolName: "fan", accessibilityDescription: description)
     image?.isTemplate = true
     button.image = image
-    button.title = controller.menuBarText
-    button.imagePosition = controller.menuBarText.isEmpty ? .imageOnly : .imageLeading
-    button.toolTip = "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
+    let normalText = controller.menuBarText
+    let attributedTitle = NSMutableAttributedString()
+    if !normalText.isEmpty {
+      attributedTitle.append(
+        NSAttributedString(
+          string: normalText,
+          attributes: [.foregroundColor: NSColor.labelColor]))
+    }
+    if let alert = controller.menuBarHotspotAlertText {
+      if !normalText.isEmpty { attributedTitle.append(NSAttributedString(string: "  ")) }
+      attributedTitle.append(
+        NSAttributedString(
+          string: alert,
+          attributes: [.foregroundColor: NSColor.systemRed]))
+    }
+    button.attributedTitle = attributedTitle
+    button.imagePosition = attributedTitle.length == 0 ? .imageOnly : .imageLeading
+    button.toolTip =
+      "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
+      + (controller.menuBarHotspotAlertText.map { " · \($0)" } ?? "")
   }
 
   private func updatePopoverSize() {

@@ -12,11 +12,16 @@ struct FanReading: Sendable, Equatable, Identifiable {
 struct FanSnapshot: Sendable, Equatable {
   let temperature: Double
   let hotspotTemperature: Double?
+  let hotspotSource: String?
   let fans: [FanReading]
 
-  init(temperature: Double, hotspotTemperature: Double? = nil, fans: [FanReading]) {
+  init(
+    temperature: Double, hotspotTemperature: Double? = nil, hotspotSource: String? = nil,
+    fans: [FanReading]
+  ) {
     self.temperature = temperature
     self.hotspotTemperature = hotspotTemperature
+    self.hotspotSource = hotspotSource
     self.fans = fans
   }
 }

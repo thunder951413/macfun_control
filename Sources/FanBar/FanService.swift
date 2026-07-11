@@ -36,9 +36,14 @@ actor FanService {
 
   func sample(source: CPUTemperatureSource = .package) throws -> FanSnapshot {
     guard hardware.isOpen else { return try prepare(source: source) }
-    let temperature = try hardware.cpuTemperature(source: source)
-    let hotspot =
-      source == .hotspot ? temperature : try? hardware.cpuTemperature(source: .hotspot)
+    let hotspotReading = try? hardware.cpuHotspotReading()
+    let temperature =
+      if source == .hotspot, let hotspotReading {
+        hotspotReading.value
+      } else {
+        try hardware.cpuTemperature(source: source)
+      }
+    let hotspot = hotspotReading?.value
     guard temperature.isFinite, (0...125).contains(temperature) else {
       throw SMCClient.SMCError.invalidValue("CPU temperature")
     }
@@ -59,7 +64,9 @@ actor FanService {
           index: index, actualRPM: actual,
           minimumRPM: minimum, maximumRPM: maximum))
     }
-    return FanSnapshot(temperature: temperature, hotspotTemperature: hotspot, fans: fans)
+    return FanSnapshot(
+      temperature: temperature, hotspotTemperature: hotspot,
+      hotspotSource: hotspotReading?.key, fans: fans)
   }
 
   func temperatureDashboard() throws -> TemperatureDashboard {

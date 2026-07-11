@@ -33,6 +33,7 @@ final class FanController: ObservableObject {
   @Published private(set) var isControlEnabled: Bool
   @Published private(set) var currentTemperature: Double?
   @Published private(set) var currentHotspotTemperature: Double?
+  @Published private(set) var currentHotspotSource: String?
   @Published private(set) var temperatureDashboard = TemperatureDashboard.empty
   @Published private(set) var fanReadings: [FanReading] = []
   @Published private(set) var targetRPMs: [Double] = []
@@ -129,6 +130,11 @@ final class FanController: ObservableObject {
     }
   }
 
+  var menuBarHotspotAlertText: String? {
+    HotspotMenuAlert.text(
+      temperature: currentHotspotTemperature, source: currentHotspotSource)
+  }
+
   var curvePercent: Int? {
     guard let currentTemperature,
       let fraction = policy.curveFraction(
@@ -205,9 +211,10 @@ final class FanController: ObservableObject {
       let filteredTemperature = temperatureFilter.record(rawSnapshot.temperature)
       let snapshot = FanSnapshot(
         temperature: filteredTemperature, hotspotTemperature: rawSnapshot.hotspotTemperature,
-        fans: rawSnapshot.fans)
+        hotspotSource: rawSnapshot.hotspotSource, fans: rawSnapshot.fans)
       currentTemperature = filteredTemperature
       currentHotspotTemperature = rawSnapshot.hotspotTemperature
+      currentHotspotSource = rawSnapshot.hotspotSource
       fanReadings = rawSnapshot.fans
       if dashboardRefreshCountdown <= 0 {
         if let dashboard = try? await service.temperatureDashboard() {

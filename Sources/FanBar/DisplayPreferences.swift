@@ -34,6 +34,23 @@ enum PopoverTab: String, Hashable {
   }
 }
 
+enum HotspotMenuAlert {
+  static func text(temperature: Double?, source: String?) -> String? {
+    guard let temperature, temperature.isFinite, temperature > 90 else { return nil }
+    return "🌡 \(readableSource(source)) \(Int(temperature.rounded()))°"
+  }
+
+  static func readableSource(_ source: String?) -> String {
+    switch source {
+    case "TCMz": "CPU 芯片最高热点"
+    case "TCMb": "CPU 核心最高温"
+    case "CPU hotspot": "CPU 最高热点"
+    case .some(let key): "温度传感器（\(key)）"
+    case nil: "CPU 最高热点"
+    }
+  }
+}
+
 extension CPUTemperatureSource: Identifiable {
   public var id: String { rawValue }
 

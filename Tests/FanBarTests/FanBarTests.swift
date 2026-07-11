@@ -18,11 +18,13 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   var automaticWriteCount = 0
   var overrideActive = false
   var sensorReadings: [TemperatureReading] = []
+  var hotspotReading = TemperatureReading(key: "TCMz", value: 70)
 
   func open() throws { isOpen = true }
   func close() { isOpen = false }
   func fanCount() throws -> Int { count }
   func cpuTemperature() throws -> Double { temperature }
+  func cpuHotspotReading() throws -> TemperatureReading { hotspotReading }
   func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
   func fanActualRPM(fan index: Int) throws -> Double { actual[index] }
   func fanMinimumRPM(fan index: Int) throws -> Double { minimum[index] }
@@ -179,6 +181,18 @@ struct MenuBarDisplayModeTests {
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
     #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
     #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 640)
+  }
+
+  @Test("hotspot menu alert appears only above 90°C and includes its source")
+  func hotspotMenuAlertThreshold() {
+    #expect(HotspotMenuAlert.text(temperature: 90, source: "TCMz") == nil)
+    #expect(
+      HotspotMenuAlert.text(temperature: 90.6, source: "TCMz")
+        == "🌡 CPU 芯片最高热点 91°")
+    #expect(HotspotMenuAlert.text(temperature: 95, source: nil) == "🌡 CPU 最高热点 95°")
+    #expect(
+      HotspotMenuAlert.text(temperature: 96, source: "TXYZ")
+        == "🌡 温度传感器（TXYZ） 96°")
   }
 }
 

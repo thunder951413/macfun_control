@@ -131,6 +131,9 @@ public final class RoutedFanHardware: FanHardware, @unchecked Sendable {
   public func cpuTemperature(source: CPUTemperatureSource) throws -> Double {
     try local.cpuTemperature(source: source)
   }
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    try local.cpuHotspotReading()
+  }
   public func allTemperatureReadings() -> [TemperatureReading] {
     local.allTemperatureReadings()
   }

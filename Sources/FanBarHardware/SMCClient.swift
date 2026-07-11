@@ -27,6 +27,7 @@ public protocol FanHardware: Sendable {
   func fanCount() throws -> Int
   func cpuTemperature() throws -> Double
   func cpuTemperature(source: CPUTemperatureSource) throws -> Double
+  func cpuHotspotReading() throws -> TemperatureReading
   func allTemperatureReadings() -> [TemperatureReading]
   func fanActualRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
@@ -45,6 +46,10 @@ extension FanHardware {
   }
 
   public func allTemperatureReadings() -> [TemperatureReading] { [] }
+
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    TemperatureReading(key: "CPU hotspot", value: try cpuTemperature(source: .hotspot))
+  }
 }
 
 public final class SMCClient: FanHardware, @unchecked Sendable {
@@ -219,6 +224,13 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     return value
   }
 
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    guard let reading = firstValidTemperatureReading(["TCMz", "TCMb"]) else {
+      throw SMCError.noTemperatureKey
+    }
+    return reading
+  }
+
   public static func robustAverage(_ values: [Double]) -> Double? {
     let sorted = values.filter(\.isFinite).sorted()
     guard !sorted.isEmpty else { return nil }
@@ -252,11 +264,15 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   private func firstValidTemperature(_ keys: [String]) -> Double? {
-    keys.lazy.compactMap { key -> Double? in
+    firstValidTemperatureReading(keys)?.value
+  }
+
+  private func firstValidTemperatureReading(_ keys: [String]) -> TemperatureReading? {
+    keys.lazy.compactMap { key -> TemperatureReading? in
       guard let value = try? self.readNumeric(key), value.isFinite, (0...125).contains(value) else {
         return nil
       }
-      return value
+      return TemperatureReading(key: key, value: value)
     }.first
   }
 
