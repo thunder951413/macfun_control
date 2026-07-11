@@ -23,6 +23,10 @@ final class FanController: ObservableObject {
       case .error: "安全回退"
       }
     }
+
+    var menuBarSymbolName: String {
+      self == .manual ? "fan.fill" : "fan"
+    }
   }
 
   @Published private(set) var thresholdCelsius: Double

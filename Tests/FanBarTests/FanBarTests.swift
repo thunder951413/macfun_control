@@ -137,6 +137,14 @@ struct MenuBarDisplayModeTests {
       #expect(!mode.label.isEmpty)
     }
   }
+
+  @Test("menu bar fan icon fills only while FanBar owns acceleration")
+  func fanIconReflectsControlState() {
+    #expect(FanController.ControlState.manual.menuBarSymbolName == "fan.fill")
+    #expect(FanController.ControlState.automatic.menuBarSymbolName == "fan")
+    #expect(FanController.ControlState.monitoring.menuBarSymbolName == "fan")
+    #expect(FanController.ControlState.error.menuBarSymbolName == "fan")
+  }
 }
 
 @Suite("CPU temperature selection")

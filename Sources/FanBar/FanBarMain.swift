@@ -19,7 +19,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     if let button = statusItem.button {
-      button.image = NSImage(systemSymbolName: "fan", accessibilityDescription: "FanBar")
       button.action = #selector(togglePopover)
       button.target = self
     }
@@ -75,6 +74,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func updateStatusItem() {
     guard let button = statusItem?.button else { return }
+    let description =
+      controller.state == .manual ? "FanBar 正在加速风扇" : "FanBar 系统自动风扇"
+    let image =
+      NSImage(
+        systemSymbolName: controller.state.menuBarSymbolName,
+        accessibilityDescription: description)
+      ?? NSImage(systemSymbolName: "fan", accessibilityDescription: description)
+    image?.isTemplate = true
+    button.image = image
     button.title = controller.menuBarText
     button.imagePosition = controller.menuBarText.isEmpty ? .imageOnly : .imageLeading
     button.toolTip = "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
