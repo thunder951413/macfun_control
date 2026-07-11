@@ -20,13 +20,36 @@ struct FanPopoverView: View {
   }
 
   var body: some View {
+    VStack(spacing: 0) {
+      header
+        .padding(.horizontal, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 10)
+      Divider()
+      TabView {
+        sensorTab
+          .tabItem { Label("传感器", systemImage: "thermometer.medium") }
+        settingsTab
+          .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
+      }
+    }
+    .frame(width: 520, height: 700)
+  }
+
+  private var sensorTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        header
         metrics
         temperatureOverview
         sensorTemperatures
-        Divider()
+      }
+      .padding(18)
+    }
+  }
+
+  private var settingsTab: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
         menuBarSettings
         Divider()
         controls
@@ -36,7 +59,6 @@ struct FanPopoverView: View {
       }
       .padding(18)
     }
-    .frame(width: 520, height: 700)
   }
 
   private var header: some View {
