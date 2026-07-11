@@ -49,6 +49,7 @@ final class FanController: ObservableObject {
   private static let temperatureSourceKey = "temperatureSource"
   private let service: FanService
   private let policy: FanSafetyPolicy
+  private let slewLimiter: FanTargetSlewLimiter
   private let pollInterval: TimeInterval
   private var timer: Timer?
   private var isRefreshing = false
@@ -62,11 +63,13 @@ final class FanController: ObservableObject {
   init(
     service: FanService = FanService(),
     policy: FanSafetyPolicy = FanSafetyPolicy(),
+    slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
     pollInterval: TimeInterval = 2,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager()
   ) {
     self.service = service
     self.policy = policy
+    self.slewLimiter = slewLimiter
     self.pollInterval = pollInterval
     self.helperManager = helperManager
 
@@ -246,11 +249,14 @@ final class FanController: ObservableObject {
       case .manual(let targets):
         consecutiveCoolSamples = 0
         setSessionActive(true)
-        try await service.apply(targets: targets, snapshot: snapshot)
+        let limitedTargets = slewLimiter.limit(
+          desired: targets, previous: targetRPMs, fans: snapshot.fans,
+          interval: pollInterval, bypass: policy.isEmergency(snapshot))
+        try await service.apply(targets: limitedTargets, snapshot: snapshot)
         logger.notice(
-          "manual curve applied temperature=\(snapshot.temperature, privacy: .public) targets=\(String(describing: targets), privacy: .public)"
+          "manual curve applied temperature=\(snapshot.temperature, privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
         )
-        targetRPMs = targets
+        targetRPMs = limitedTargets
         state = .manual
         statusText =
           snapshot.temperature >= policy.emergencyTemperature

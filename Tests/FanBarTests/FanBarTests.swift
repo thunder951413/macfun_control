@@ -110,13 +110,37 @@ struct FanSafetyPolicyTests {
     #expect(filter.record(52) == 53)
   }
 
-  @Test("hotspot emergency overrides a cool package temperature")
+  @Test("90°C hotspot emergency overrides a cool package temperature")
   func hotspotEmergencyOverridesPackage() throws {
     let fan = FanReading(index: 0, actualRPM: 2_000, minimumRPM: 1_800, maximumRPM: 6_500)
     let decision = policy.decision(
-      for: FanSnapshot(temperature: 53, hotspotTemperature: 101, fans: [fan]),
+      for: FanSnapshot(temperature: 53, hotspotTemperature: 90, fans: [fan]),
       threshold: 68, wasManual: false)
     #expect(try #require(manualTargets(decision)) == [6_500])
+  }
+
+  @Test("slew limiter raises faster than it lowers")
+  func asymmetricSlewLimiter() {
+    let limiter = FanTargetSlewLimiter()
+    let fan = FanReading(index: 0, actualRPM: 2_000, minimumRPM: 1_500, maximumRPM: 6_000)
+    #expect(
+      limiter.limit(
+        desired: [5_000], previous: [3_000], fans: [fan], interval: 2, bypass: false)
+        == [3_500])
+    #expect(
+      limiter.limit(
+        desired: [2_000], previous: [3_000], fans: [fan], interval: 2, bypass: false)
+        == [2_800])
+  }
+
+  @Test("emergency bypasses slew limiting")
+  func emergencyBypassesSlewLimiter() {
+    let limiter = FanTargetSlewLimiter()
+    let fan = FanReading(index: 0, actualRPM: 2_000, minimumRPM: 1_500, maximumRPM: 6_000)
+    #expect(
+      limiter.limit(
+        desired: [6_000], previous: [2_000], fans: [fan], interval: 2, bypass: true)
+        == [6_000])
   }
 
   @Test("curve preview maps threshold to zero and 90°C to maximum")

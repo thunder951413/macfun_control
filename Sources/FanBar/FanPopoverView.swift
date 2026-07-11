@@ -220,7 +220,7 @@ struct FanPopoverView: View {
           ), in: FanSafetyPolicy.thresholdRange, step: 1
         )
         .accessibilityLabel("开始加速温度")
-        Text("按所选温度来源判断：低于此温度由 macOS 控制；超过后线性加速，90°C 达到最大转速。热点达到 100°C 时始终紧急满速。")
+        Text("超过设定温度后线性加速；普通升速每 2 秒最多 500 rpm、降速最多 200 rpm。控制温度或热点达到 90°C 时绕过限制，立即满速。")
           .font(.caption)
           .foregroundStyle(.secondary)
       }

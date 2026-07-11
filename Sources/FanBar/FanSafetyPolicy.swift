@@ -39,6 +39,35 @@ struct TemperatureSafetyFilter: Sendable {
   mutating func reset() { samples.removeAll() }
 }
 
+struct FanTargetSlewLimiter: Sendable {
+  let increaseRPMPerSecond: Double
+  let decreaseRPMPerSecond: Double
+
+  init(increaseRPMPerSecond: Double = 250, decreaseRPMPerSecond: Double = 100) {
+    self.increaseRPMPerSecond = max(0, increaseRPMPerSecond)
+    self.decreaseRPMPerSecond = max(0, decreaseRPMPerSecond)
+  }
+
+  func limit(
+    desired: [Double], previous: [Double], fans: [FanReading], interval: TimeInterval,
+    bypass: Bool
+  ) -> [Double] {
+    guard desired.count == fans.count else { return desired }
+    if bypass { return zip(desired, fans).map { min($1.maximumRPM, $0) } }
+
+    let seconds = max(0, interval)
+    return desired.enumerated().map { index, desiredTarget in
+      let fan = fans[index]
+      let baseline = previous.indices.contains(index) ? previous[index] : fan.actualRPM
+      let limited =
+        desiredTarget >= baseline
+        ? min(desiredTarget, baseline + increaseRPMPerSecond * seconds)
+        : max(desiredTarget, baseline - decreaseRPMPerSecond * seconds)
+      return min(fan.maximumRPM, max(fan.actualRPM, max(fan.minimumRPM, limited)))
+    }
+  }
+}
+
 struct FanSafetyPolicy: Sendable {
   static let thresholdRange = 55.0...80.0
   static let defaultThreshold = 68.0
@@ -49,7 +78,7 @@ struct FanSafetyPolicy: Sendable {
 
   init(
     hysteresis: Double = 3, emergencyTemperature: Double = 90,
-    emergencyHotspotTemperature: Double = 100
+    emergencyHotspotTemperature: Double = 90
   ) {
     self.hysteresis = hysteresis
     self.emergencyTemperature = emergencyTemperature
@@ -59,6 +88,11 @@ struct FanSafetyPolicy: Sendable {
   enum Decision: Equatable {
     case automatic
     case manual([Double])
+  }
+
+  func isEmergency(_ snapshot: FanSnapshot) -> Bool {
+    snapshot.temperature >= emergencyTemperature
+      || (snapshot.hotspotTemperature ?? -.infinity) >= emergencyHotspotTemperature
   }
 
   func curveFraction(temperature: Double, threshold: Double) -> Double? {
@@ -72,9 +106,8 @@ struct FanSafetyPolicy: Sendable {
   func decision(for snapshot: FanSnapshot, threshold: Double, wasManual: Bool) -> Decision {
     let threshold = min(
       max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
-    let hotspotEmergency =
-      snapshot.hotspotTemperature.map { $0 >= emergencyHotspotTemperature } ?? false
-    let shouldBeManual = hotspotEmergency
+    let emergency = isEmergency(snapshot)
+    let shouldBeManual = emergency
       || (wasManual
         ? snapshot.temperature > threshold - hysteresis
         : snapshot.temperature > threshold)
@@ -82,7 +115,7 @@ struct FanSafetyPolicy: Sendable {
     guard shouldBeManual else { return .automatic }
 
     let targets = snapshot.fans.map { fan in
-      if hotspotEmergency { return fan.maximumRPM }
+      if emergency { return fan.maximumRPM }
       guard
         let progress = curveFraction(
           temperature: snapshot.temperature, threshold: threshold)
