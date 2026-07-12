@@ -29,7 +29,7 @@ enum PopoverTab: String, Hashable {
       let rows = max(1, Int(ceil(Double(sensorGroupCount) / 2)))
       return min(620, max(390, 220 + Double(rows) * 68))
     case .settings:
-      return 640
+      return 670
     }
   }
 }

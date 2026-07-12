@@ -200,6 +200,19 @@ struct FanPopoverView: View {
         .labelsHidden()
         .frame(width: 160)
       }
+      Toggle(
+        isOn: Binding(
+          get: { controller.showsHotspotMenuAlert },
+          set: { controller.setShowsHotspotMenuAlert($0) }
+        )
+      ) {
+        VStack(alignment: .leading, spacing: 2) {
+          Label("显示高温热点提醒", systemImage: "thermometer.high")
+          Text("CPU 热点高于 90°C 时在菜单栏显示红色提醒")
+            .font(.caption2).foregroundStyle(.secondary)
+        }
+      }
+      .toggleStyle(.switch)
     }
     .font(.callout)
   }

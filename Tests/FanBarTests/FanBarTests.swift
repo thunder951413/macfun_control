@@ -180,7 +180,7 @@ struct MenuBarDisplayModeTests {
       PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
     #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
-    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 640)
+    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 670)
   }
 
   @Test("hotspot menu alert appears only above 90°C and includes its source")

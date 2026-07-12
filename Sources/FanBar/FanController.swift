@@ -40,6 +40,7 @@ final class FanController: ObservableObject {
   @Published private(set) var state: ControlState = .starting
   @Published private(set) var statusText = "正在连接 AppleSMC…"
   @Published private(set) var menuBarDisplayMode: MenuBarDisplayMode
+  @Published private(set) var showsHotspotMenuAlert: Bool
   @Published private(set) var temperatureSource: CPUTemperatureSource
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   let helperManager: PrivilegedHelperManager
@@ -48,6 +49,7 @@ final class FanController: ObservableObject {
   private static let enabledKey = "controlEnabled"
   private static let activeSessionKey = "ownsActiveManualSession"
   private static let menuBarDisplayKey = "menuBarDisplayMode"
+  private static let hotspotMenuAlertKey = "showsHotspotMenuAlert"
   private static let temperatureSourceKey = "temperatureSource"
   private let service: FanService
   private let policy: FanSafetyPolicy
@@ -91,6 +93,7 @@ final class FanController: ObservableObject {
     menuBarDisplayMode =
       MenuBarDisplayMode(
         rawValue: defaults.string(forKey: Self.menuBarDisplayKey) ?? "") ?? .temperature
+    showsHotspotMenuAlert = defaults.object(forKey: Self.hotspotMenuAlertKey) as? Bool ?? true
     temperatureSource =
       CPUTemperatureSource(
         rawValue: defaults.string(forKey: Self.temperatureSourceKey) ?? "") ?? .package
@@ -131,7 +134,8 @@ final class FanController: ObservableObject {
   }
 
   var menuBarHotspotAlertText: String? {
-    HotspotMenuAlert.text(
+    guard showsHotspotMenuAlert else { return nil }
+    return HotspotMenuAlert.text(
       temperature: currentHotspotTemperature, source: currentHotspotSource)
   }
 
@@ -151,6 +155,11 @@ final class FanController: ObservableObject {
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
     menuBarDisplayMode = mode
     UserDefaults.standard.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
+  }
+
+  func setShowsHotspotMenuAlert(_ enabled: Bool) {
+    showsHotspotMenuAlert = enabled
+    UserDefaults.standard.set(enabled, forKey: Self.hotspotMenuAlertKey)
   }
 
   func setPopoverTab(_ tab: PopoverTab) {
