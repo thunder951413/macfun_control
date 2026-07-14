@@ -44,6 +44,7 @@ final class FanController: ObservableObject {
   @Published private(set) var temperatureSource: CPUTemperatureSource
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   let helperManager: PrivilegedHelperManager
+  let launchAtLoginManager: LaunchAtLoginManager
 
   private static let thresholdKey = "thresholdCelsius"
   private static let enabledKey = "controlEnabled"
@@ -69,13 +70,15 @@ final class FanController: ObservableObject {
     policy: FanSafetyPolicy = FanSafetyPolicy(),
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
     pollInterval: TimeInterval = 2,
-    helperManager: PrivilegedHelperManager = PrivilegedHelperManager()
+    helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
+    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
   ) {
     self.service = service
     self.policy = policy
     self.slewLimiter = slewLimiter
     self.pollInterval = pollInterval
     self.helperManager = helperManager
+    self.launchAtLoginManager = launchAtLoginManager
 
     let defaults = UserDefaults.standard
     let savedThreshold = defaults.object(forKey: Self.thresholdKey) as? Double

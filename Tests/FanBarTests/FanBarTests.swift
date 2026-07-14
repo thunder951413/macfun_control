@@ -145,7 +145,6 @@ struct FanSafetyPolicyTests {
         == [6_000])
   }
 
-
   @Test("curve preview maps threshold to zero and 90°C to maximum")
   func curvePreviewFractions() {
     #expect(policy.curveFraction(temperature: 68, threshold: 68) == nil)
@@ -180,7 +179,7 @@ struct MenuBarDisplayModeTests {
       PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
     #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
-    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 670)
+    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 620)
   }
 
   @Test("hotspot menu alert appears only above 90°C and includes its source")
@@ -193,6 +192,15 @@ struct MenuBarDisplayModeTests {
     #expect(
       HotspotMenuAlert.text(temperature: 96, source: "TXYZ")
         == "🌡 温度传感器（TXYZ） 96°")
+  }
+
+  @Test("login item service statuses map to clear settings states")
+  @MainActor
+  func loginItemStatusMapping() {
+    #expect(LaunchAtLoginManager.state(for: .notRegistered) == .disabled)
+    #expect(LaunchAtLoginManager.state(for: .enabled) == .enabled)
+    #expect(LaunchAtLoginManager.state(for: .requiresApproval) == .approvalRequired)
+    #expect(LaunchAtLoginManager.state(for: .notFound) == .unavailable)
   }
 }
 

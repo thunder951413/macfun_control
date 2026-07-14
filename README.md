@@ -4,6 +4,8 @@ FanBar is a macOS 14+ menu bar app that monitors CPU temperature and can apply a
 
 Fan writes are performed by a separately signed, root LaunchDaemon registered with macOS `SMAppService`. The menu bar app remains unprivileged and communicates with the helper over an authenticated XPC connection.
 
+The popover separates live sensor summaries from settings. Its General section controls menu bar content, the fan-curve temperature source, high-hotspot alerts, and the optional macOS login item. FanBar does not enable launch at login unless the user turns it on.
+
 ## Safety behavior
 
 - Fresh installs start in **monitor-only mode**. Fan writes require an explicit toggle.

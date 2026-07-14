@@ -1,5 +1,5 @@
-import Foundation
 import FanBarHardware
+import Foundation
 
 enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
   case iconOnly
@@ -29,7 +29,7 @@ enum PopoverTab: String, Hashable {
       let rows = max(1, Int(ceil(Double(sensorGroupCount) / 2)))
       return min(620, max(390, 220 + Double(rows) * 68))
     case .settings:
-      return 670
+      return 620
     }
   }
 }

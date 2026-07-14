@@ -1,13 +1,15 @@
-import SwiftUI
 import FanBarHardware
+import SwiftUI
 
 struct FanPopoverView: View {
   @ObservedObject var controller: FanController
   @ObservedObject private var helperManager: PrivilegedHelperManager
+  @ObservedObject private var launchAtLoginManager: LaunchAtLoginManager
 
   init(controller: FanController) {
     self.controller = controller
     helperManager = controller.helperManager
+    launchAtLoginManager = controller.launchAtLoginManager
   }
 
   private var stateColor: Color {
@@ -22,9 +24,9 @@ struct FanPopoverView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
-        .padding(.horizontal, 18)
-        .padding(.top, 16)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 20)
+        .padding(.top, 17)
+        .padding(.bottom, 12)
       Divider()
       TabView(
         selection: Binding(
@@ -41,6 +43,10 @@ struct FanPopoverView: View {
       }
     }
     .frame(width: 520, height: controller.preferredPopoverHeight)
+    .onAppear {
+      helperManager.refresh()
+      launchAtLoginManager.refresh()
+    }
   }
 
   private var sensorTab: some View {
@@ -50,21 +56,21 @@ struct FanPopoverView: View {
         temperatureOverview
         sensorTemperatures
       }
-      .padding(18)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
     }
   }
 
   private var settingsTab: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 16) {
         menuBarSettings
-        Divider()
         controls
         curvePreview
-        Divider()
         safetyNote
       }
-      .padding(18)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
     }
   }
 
@@ -94,27 +100,31 @@ struct FanPopoverView: View {
   }
 
   private var metrics: some View {
-    VStack(spacing: 9) {
-      HStack {
-        Label("风扇状态", systemImage: "fan")
-        Spacer()
-        Text(controller.fanText).monospacedDigit()
-      }
-      HStack {
-        Text("目标转速").foregroundStyle(.secondary)
-        Spacer()
-        Text(controller.targetText)
-          .monospacedDigit()
+    HStack(spacing: 12) {
+      Image(systemName: "fan")
+        .font(.title3)
+        .foregroundStyle(controller.state == .manual ? .orange : .secondary)
+        .frame(width: 32, height: 32)
+        .background(.quaternary.opacity(0.5), in: Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text("风扇状态").fontWeight(.medium)
+        Text("目标转速 · \(controller.targetText)")
+          .font(.caption)
           .foregroundStyle(controller.state == .manual ? .orange : .secondary)
       }
-      .font(.caption)
+      Spacer(minLength: 12)
+      Text(controller.fanText)
+        .font(.system(.callout, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
     }
+    .padding(12)
+    .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
     .font(.callout)
   }
 
   private var temperatureOverview: some View {
     VStack(alignment: .leading, spacing: 8) {
-      HStack {
+      HStack(alignment: .firstTextBaseline) {
         Label("主要温度", systemImage: "thermometer.medium")
           .font(.callout).fontWeight(.medium)
         Spacer()
@@ -122,7 +132,9 @@ struct FanPopoverView: View {
           .font(.caption2)
           .foregroundStyle(.secondary)
       }
-      LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8
+      ) {
         TemperatureMetricCard(
           title: "CPU 封装", value: dashboardValue(.package),
           isControlSource: controller.temperatureSource == .package)
@@ -151,7 +163,9 @@ struct FanPopoverView: View {
         Text("正在读取 SMC 传感器…")
           .font(.caption).foregroundStyle(.secondary)
       } else {
-        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+        LazyVGrid(
+          columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible())], spacing: 8
+        ) {
           ForEach(groups) { group in
             SensorGroupSummary(group: group)
           }
@@ -169,10 +183,10 @@ struct FanPopoverView: View {
   }
 
   private var menuBarSettings: some View {
-    VStack(spacing: 10) {
-      HStack {
-        Label("菜单栏显示", systemImage: "menubar.rectangle")
-        Spacer()
+    PopoverSection(title: "常规", symbol: "gearshape") {
+      SettingRow(
+        title: "菜单栏显示", subtitle: "选择图标旁显示的信息", symbol: "menubar.rectangle"
+      ) {
         Picker(
           "菜单栏显示",
           selection: Binding(
@@ -183,11 +197,12 @@ struct FanPopoverView: View {
           ForEach(MenuBarDisplayMode.allCases) { mode in Text(mode.label).tag(mode) }
         }
         .labelsHidden()
-        .frame(width: 160)
+        .frame(width: 172)
       }
-      HStack {
-        Label("温度来源", systemImage: "cpu")
-        Spacer()
+      SectionDivider()
+      SettingRow(
+        title: "控制温度", subtitle: "智能曲线采用的温度来源", symbol: "cpu"
+      ) {
         Picker(
           "温度来源",
           selection: Binding(
@@ -198,54 +213,95 @@ struct FanPopoverView: View {
           ForEach(CPUTemperatureSource.allCases) { source in Text(source.label).tag(source) }
         }
         .labelsHidden()
-        .frame(width: 160)
+        .frame(width: 172)
       }
-      Toggle(
-        isOn: Binding(
-          get: { controller.showsHotspotMenuAlert },
-          set: { controller.setShowsHotspotMenuAlert($0) }
-        )
+      SectionDivider()
+      SettingRow(
+        title: "高温热点提醒", subtitle: "超过 90°C 时在菜单栏以红色提示",
+        symbol: "thermometer.high"
       ) {
-        VStack(alignment: .leading, spacing: 2) {
-          Label("显示高温热点提醒", systemImage: "thermometer.high")
-          Text("CPU 热点高于 90°C 时在菜单栏显示红色提醒")
-            .font(.caption2).foregroundStyle(.secondary)
+        Toggle(
+          "高温热点提醒",
+          isOn: Binding(
+            get: { controller.showsHotspotMenuAlert },
+            set: { controller.setShowsHotspotMenuAlert($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(.switch)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "开机启动", subtitle: launchAtLoginSubtitle, symbol: "power"
+      ) {
+        HStack(spacing: 8) {
+          if launchAtLoginManager.state == .approvalRequired {
+            Button("去批准") { launchAtLoginManager.openApprovalSettings() }
+              .controlSize(.small)
+          }
+          Toggle(
+            "开机启动",
+            isOn: Binding(
+              get: { launchAtLoginManager.isEnabled },
+              set: { launchAtLoginManager.setEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .disabled(launchAtLoginManager.state == .unavailable)
         }
       }
-      .toggleStyle(.switch)
     }
-    .font(.callout)
+  }
+
+  private var launchAtLoginSubtitle: String {
+    if let error = launchAtLoginManager.errorMessage { return "设置失败：\(error)" }
+    return switch launchAtLoginManager.state {
+    case .disabled: "登录 macOS 后自动运行 FanBar"
+    case .enabled: "已加入系统登录项"
+    case .approvalRequired: "请在系统设置中允许后台项目"
+    case .unavailable: "当前应用位置或签名不支持登录项"
+    }
   }
 
   private var controls: some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Label("特权控制组件", systemImage: "lock.shield")
-        Spacer()
-        Text(helperManager.state.label)
-          .foregroundStyle(helperManager.isReady ? .green : .orange)
-        if !helperManager.isReady {
-          Button(helperManager.state == .approvalRequired ? "打开设置" : "启用") {
-            if helperManager.state == .approvalRequired {
-              helperManager.openApprovalSettings()
-            } else {
-              helperManager.enable()
+      PopoverSection(title: "风扇控制", symbol: "fan") {
+        SettingRow(
+          title: "特权控制组件", subtitle: helperManager.state.label, symbol: "lock.shield"
+        ) {
+          if helperManager.isReady {
+            Label("可用", systemImage: "checkmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.green)
+          } else {
+            Button(helperManager.state == .approvalRequired ? "打开设置" : "启用") {
+              if helperManager.state == .approvalRequired {
+                helperManager.openApprovalSettings()
+              } else {
+                helperManager.enable()
+              }
             }
+            .controlSize(.small)
           }
-          .controlSize(.small)
+        }
+        SectionDivider()
+        SettingRow(
+          title: "智能风扇曲线", subtitle: "高于设定温度时补充 macOS 调速",
+          symbol: "chart.line.uptrend.xyaxis"
+        ) {
+          Toggle(
+            "智能风扇曲线",
+            isOn: Binding(
+              get: { controller.isControlEnabled },
+              set: { controller.setControlEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .disabled(!helperManager.isReady)
         }
       }
-      .font(.caption)
-
-      Toggle(
-        "启用智能风扇曲线",
-        isOn: Binding(
-          get: { controller.isControlEnabled },
-          set: { controller.setControlEnabled($0) }
-        )
-      )
-      .toggleStyle(.switch)
-      .disabled(!helperManager.isReady)
 
       VStack(alignment: .leading, spacing: 7) {
         HStack {
@@ -266,25 +322,35 @@ struct FanPopoverView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
       }
+      .padding(12)
+      .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
       .disabled(!controller.isControlEnabled)
     }
   }
 
   private var curvePreview: some View {
-    FanCurvePreview(
-      threshold: controller.thresholdCelsius,
-      currentTemperature: controller.currentTemperature,
-      curvePercent: controller.curvePercent,
-      isEnabled: controller.isControlEnabled)
+    PopoverSection(title: "曲线预览", symbol: "chart.xyaxis.line") {
+      FanCurvePreview(
+        threshold: controller.thresholdCelsius,
+        currentTemperature: controller.currentTemperature,
+        curvePercent: controller.curvePercent,
+        isEnabled: controller.isControlEnabled)
+    }
   }
 
   private var safetyNote: some View {
-    Label(
-      "目标转速绝不会低于当前实际转速；传感器或控制异常时会恢复 macOS 自动控制。",
-      systemImage: "shield.checkered"
-    )
+    HStack(alignment: .top, spacing: 9) {
+      Image(systemName: "shield.checkered")
+        .foregroundStyle(.green)
+        .frame(width: 18)
+      Text("目标转速绝不会低于当前实际转速；传感器或控制异常时会恢复 macOS 自动控制。")
+        .fixedSize(horizontal: false, vertical: true)
+    }
     .font(.caption)
     .foregroundStyle(.secondary)
+    .padding(11)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
   }
 }
 
@@ -307,6 +373,7 @@ private struct TemperatureMetricCard: View {
         .fontWeight(.semibold)
     }
     .padding(9)
+    .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
     .overlay {
       RoundedRectangle(cornerRadius: 8)
@@ -332,7 +399,68 @@ private struct SensorGroupSummary: View {
         .font(.caption.monospacedDigit()).fontWeight(.medium)
     }
     .padding(7)
+    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+  }
+}
+
+private struct PopoverSection<Content: View>: View {
+  let title: String
+  let symbol: String
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      Label(title, systemImage: symbol)
+        .font(.callout)
+        .fontWeight(.semibold)
+        .foregroundStyle(.primary)
+      VStack(spacing: 0) {
+        content
+      }
+      .padding(.horizontal, 12)
+      .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10)
+          .stroke(.separator.opacity(0.22), lineWidth: 0.5)
+      }
+    }
+  }
+}
+
+private struct SettingRow<Control: View>: View {
+  let title: String
+  let subtitle: String
+  let symbol: String
+  @ViewBuilder let control: Control
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 11) {
+      Image(systemName: symbol)
+        .font(.system(size: 13, weight: .medium))
+        .foregroundStyle(.secondary)
+        .frame(width: 24, height: 24)
+        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.callout)
+          .foregroundStyle(.primary)
+        Text(subtitle)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      control
+        .frame(width: 172, alignment: .trailing)
+    }
+    .frame(minHeight: 49)
+  }
+}
+
+private struct SectionDivider: View {
+  var body: some View {
+    Divider().padding(.leading, 35)
   }
 }
 
@@ -345,8 +473,8 @@ private struct FanCurvePreview: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text(isEnabled ? "风扇调整预览" : "风扇调整预览（未启用）")
-          .font(.callout).fontWeight(.medium)
+        Text(isEnabled ? "曲线已启用" : "曲线未启用")
+          .foregroundStyle(isEnabled ? .orange : .secondary)
         Spacer()
         if let currentTemperature {
           Text("当前 \(Int(currentTemperature.rounded()))°C").font(.caption).monospacedDigit()
