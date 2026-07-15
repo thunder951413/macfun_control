@@ -74,7 +74,7 @@ struct FanTargetSlewLimiter: Sendable {
 }
 
 struct FanSafetyPolicy: Sendable {
-  static let thresholdRange = 55.0...80.0
+  static let thresholdRange = 40.0...80.0
   static let defaultThreshold = 68.0
 
   let hysteresis: Double

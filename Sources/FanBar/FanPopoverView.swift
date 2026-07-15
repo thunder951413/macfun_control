@@ -318,9 +318,12 @@ struct FanPopoverView: View {
           ), in: FanSafetyPolicy.thresholdRange, step: 1
         )
         .accessibilityLabel("开始加速温度")
-        Text("FanBar 只依据所选温度来源补充 macOS 控制。普通升速每 2 秒最多 500 rpm、降速最多 200 rpm；所选温度达到 90°C 时立即满速。")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        Text(
+          "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
+            + "普通升速每 2 秒最多 500 rpm、降速最多 200 rpm，达到 90°C 时立即满速。"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
       .padding(12)
       .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
@@ -489,7 +492,7 @@ private struct FanCurvePreview: View {
         let width = right - left
         let height = bottom - top
         func x(_ temperature: Double) -> Double {
-          left + min(1, max(0, (temperature - 50) / 40)) * width
+          left + min(1, max(0, (temperature - 40) / 50)) * width
         }
         func y(_ fraction: Double) -> Double { bottom - min(1, max(0, fraction)) * height }
 
@@ -524,7 +527,7 @@ private struct FanCurvePreview: View {
       .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
 
       HStack {
-        Text("50°C")
+        Text("40°C")
         Spacer()
         Text("\(Int(threshold))°C 开始")
         Spacer()
@@ -536,7 +539,7 @@ private struct FanCurvePreview: View {
       if let currentTemperature {
         if let curvePercent {
           Text(
-            "\(isEnabled ? "当前控制" : "按当前设置")：\(Int(currentTemperature.rounded()))°C 时基础曲线约为最大转速的 \(curvePercent)%；若现有转速更高则不会降低。"
+            "\(isEnabled ? "当前控制" : "按当前设置")：\(Int(currentTemperature.rounded()))°C 时处于最低到最大转速区间的 \(curvePercent)%；若现有转速更高则不会降低。"
           )
         } else {
           Text("当前 \(Int(currentTemperature.rounded()))°C：低于设定温度，由 macOS 自动控制。")

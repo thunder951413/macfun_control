@@ -96,6 +96,11 @@ struct FanSafetyPolicyTests {
       for: .init(temperature: 81, fans: [fan]),
       threshold: 120, wasManual: false)
     #expect(manualTargets(decision) != nil)
+    #expect(FanSafetyPolicy.thresholdRange.lowerBound == 40)
+    #expect(
+      manualTargets(
+        policy.decision(
+          for: .init(temperature: 41, fans: [fan]), threshold: 20, wasManual: false)) != nil)
   }
 
   private func manualTargets(_ decision: FanSafetyPolicy.Decision) -> [Double]? {
@@ -147,6 +152,8 @@ struct FanSafetyPolicyTests {
 
   @Test("curve preview maps threshold to zero and 90°C to maximum")
   func curvePreviewFractions() {
+    #expect(policy.curveFraction(temperature: 40, threshold: 40) == nil)
+    #expect(policy.curveFraction(temperature: 50, threshold: 40) == 0.2)
     #expect(policy.curveFraction(temperature: 68, threshold: 68) == nil)
     #expect(policy.curveFraction(temperature: 79, threshold: 68) == 0.5)
     #expect(policy.curveFraction(temperature: 90, threshold: 68) == 1)

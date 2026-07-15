@@ -9,7 +9,7 @@ The popover separates live sensor summaries from settings. Its General section c
 ## Safety behavior
 
 - Fresh installs start in **monitor-only mode**. Fan writes require an explicit toggle.
-- Manual control starts only above the selected 55–80°C threshold.
+- Manual control starts only above the selected 40–80°C threshold.
 - A 3°C hysteresis band prevents repeated mode switching near the threshold.
 - A manual target is never lower than the fan's current speed.
 - At 90°C, FanBar requests the hardware-reported maximum speed.
