@@ -8,6 +8,8 @@ The popover separates live sensor summaries from settings. Its General section c
 
 Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0T`, `TB1T`, or `TB2T`). Users can configure a menu bar alert threshold and optionally enable a separate battery curve. CPU and battery curves are combined by taking the higher requested fan target; the battery curve reaches maximum speed at 50°C.
 
+Fan capability is detected from AppleSMC rather than a model-name list. When `FNum` reports zero controllable fans, FanBar enters temperature-only monitoring mode: it uses a thermometer menu bar icon, removes fan-speed display modes and every fan-control curve, skips privileged-helper registration, and keeps sensor monitoring plus CPU and battery alerts available.
+
 ## Safety behavior
 
 - Fresh installs start in **monitor-only mode**. Fan writes require an explicit toggle.

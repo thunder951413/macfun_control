@@ -203,7 +203,7 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
 
   public func fanCount() throws -> Int {
     let count = Int(try readUInt8("FNum"))
-    guard (1...8).contains(count) else { throw SMCError.noFans }
+    guard (0...8).contains(count) else { throw SMCError.noFans }
     return count
   }
 

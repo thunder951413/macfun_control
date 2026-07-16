@@ -17,19 +17,32 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
     case .temperatureAndFan: "温度＋转速"
     }
   }
+
+  static func available(hasControllableFans: Bool) -> [MenuBarDisplayMode] {
+    hasControllableFans ? allCases : [.iconOnly, .temperature]
+  }
+}
+
+enum MenuBarPresentation {
+  static func symbolName(state: FanController.ControlState, hasControllableFans: Bool) -> String {
+    guard hasControllableFans else { return "thermometer.medium" }
+    return state.menuBarSymbolName
+  }
 }
 
 enum PopoverTab: String, Hashable {
   case sensors
   case settings
 
-  func preferredHeight(sensorGroupCount: Int) -> Double {
+  func preferredHeight(sensorGroupCount: Int, hasControllableFans: Bool = true) -> Double {
     switch self {
     case .sensors:
       let rows = max(1, Int(ceil(Double(sensorGroupCount) / 2)))
-      return min(620, max(390, 220 + Double(rows) * 68))
+      let baseHeight = hasControllableFans ? 220.0 : 160.0
+      let minimumHeight = hasControllableFans ? 390.0 : 350.0
+      return min(620, max(minimumHeight, baseHeight + Double(rows) * 68))
     case .settings:
-      return 620
+      return hasControllableFans ? 620 : 500
     }
   }
 }

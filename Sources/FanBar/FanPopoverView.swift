@@ -52,7 +52,11 @@ struct FanPopoverView: View {
   private var sensorTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        metrics
+        if controller.isFanless {
+          fanlessMonitorNotice
+        } else {
+          metrics
+        }
         temperatureOverview
         sensorTemperatures
       }
@@ -66,9 +70,13 @@ struct FanPopoverView: View {
       VStack(alignment: .leading, spacing: 16) {
         menuBarSettings
         batterySettings
-        controls
-        curvePreview
-        safetyNote
+        if controller.isFanless {
+          fanlessSettingsNotice
+        } else {
+          controls
+          curvePreview
+          safetyNote
+        }
       }
       .padding(.horizontal, 20)
       .padding(.vertical, 16)
@@ -121,6 +129,25 @@ struct FanPopoverView: View {
     .padding(12)
     .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
     .font(.callout)
+  }
+
+  private var fanlessMonitorNotice: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "thermometer.medium")
+        .font(.title3)
+        .foregroundStyle(.blue)
+        .frame(width: 32, height: 32)
+        .background(.blue.opacity(0.1), in: Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text("无风扇设备").fontWeight(.medium)
+        Text("FanBar 仅监控温度并提供高温提醒")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+    }
+    .padding(12)
+    .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
   }
 
   private var temperatureOverview: some View {
@@ -195,14 +222,16 @@ struct FanPopoverView: View {
             set: { controller.setMenuBarDisplayMode($0) }
           )
         ) {
-          ForEach(MenuBarDisplayMode.allCases) { mode in Text(mode.label).tag(mode) }
+          ForEach(controller.availableMenuBarDisplayModes) { mode in Text(mode.label).tag(mode) }
         }
         .labelsHidden()
         .frame(width: 172)
       }
       SectionDivider()
       SettingRow(
-        title: "控制温度", subtitle: "智能曲线采用的温度来源", symbol: "cpu"
+        title: controller.isFanless ? "主要温度" : "控制温度",
+        subtitle: controller.isFanless ? "菜单栏与监控状态使用的来源" : "智能曲线采用的温度来源",
+        symbol: "cpu"
       ) {
         Picker(
           "温度来源",
@@ -290,33 +319,52 @@ struct FanPopoverView: View {
           ), range: BatteryTemperaturePreferences.alertRange)
       }
       .disabled(!controller.showsBatteryMenuAlert)
-      SectionDivider()
-      SettingRow(
-        title: "影响风扇转速", subtitle: "与 CPU 曲线比较并采用较高目标", symbol: "fan"
-      ) {
-        Toggle(
-          "影响风扇转速",
-          isOn: Binding(
-            get: { controller.isBatteryCurveEnabled },
-            set: { controller.setBatteryCurveEnabled($0) }
+      if !controller.isFanless {
+        SectionDivider()
+        SettingRow(
+          title: "影响风扇转速", subtitle: "与 CPU 曲线比较并采用较高目标", symbol: "fan"
+        ) {
+          Toggle(
+            "影响风扇转速",
+            isOn: Binding(
+              get: { controller.isBatteryCurveEnabled },
+              set: { controller.setBatteryCurveEnabled($0) }
+            )
           )
-        )
-        .labelsHidden()
-        .toggleStyle(.switch)
+          .labelsHidden()
+          .toggleStyle(.switch)
+        }
+        SectionDivider()
+        SettingRow(
+          title: "曲线介入温度", subtitle: "超过后线性加速，50°C 达到最大转速",
+          symbol: "chart.line.uptrend.xyaxis"
+        ) {
+          BatteryTemperatureSlider(
+            value: Binding(
+              get: { controller.batteryCurveThreshold },
+              set: { controller.setBatteryCurveThreshold($0) }
+            ), range: BatteryFanPolicy.thresholdRange)
+        }
+        .disabled(!controller.isBatteryCurveEnabled)
       }
-      SectionDivider()
-      SettingRow(
-        title: "曲线介入温度", subtitle: "超过后线性加速，50°C 达到最大转速",
-        symbol: "chart.line.uptrend.xyaxis"
-      ) {
-        BatteryTemperatureSlider(
-          value: Binding(
-            get: { controller.batteryCurveThreshold },
-            set: { controller.setBatteryCurveThreshold($0) }
-          ), range: BatteryFanPolicy.thresholdRange)
-      }
-      .disabled(!controller.isBatteryCurveEnabled)
     }
+  }
+
+  private var fanlessSettingsNotice: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "checkmark.shield")
+        .foregroundStyle(.green)
+        .frame(width: 18)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("已启用纯监控模式").fontWeight(.medium)
+        Text("未检测到可控风扇，因此风扇控制、转速显示和散热曲线已停用；温度监控与提醒保持可用。")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
   }
 
   private var launchAtLoginSubtitle: String {

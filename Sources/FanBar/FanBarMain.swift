@@ -35,7 +35,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     popover.contentViewController = NSHostingController(
       rootView: FanPopoverView(controller: controller))
 
-    controller.helperManager.enableIfNeeded()
     controller.start()
     sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
@@ -77,13 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func updateStatusItem() {
     guard let button = statusItem?.button else { return }
-    let description =
-      controller.state == .manual ? "FanBar 正在加速风扇" : "FanBar 系统自动风扇"
+    let description = controller.menuBarAccessibilityDescription
     let image =
       NSImage(
-        systemSymbolName: controller.state.menuBarSymbolName,
+        systemSymbolName: controller.menuBarSymbolName,
         accessibilityDescription: description)
-      ?? NSImage(systemSymbolName: "fan", accessibilityDescription: description)
+      ?? NSImage(systemSymbolName: "thermometer.medium", accessibilityDescription: description)
     image?.isTemplate = true
     button.image = image
     let normalText = controller.menuBarText
@@ -110,8 +108,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     button.attributedTitle = attributedTitle
     button.imagePosition = attributedTitle.length == 0 ? .imageOnly : .imageLeading
+    let fanDetails = controller.hasControllableFans ? " · \(controller.fanText)" : ""
     button.toolTip =
-      "FanBar · CPU \(controller.temperatureText) · 电池区域 \(controller.batteryTemperatureText) · \(controller.fanText)"
+      "FanBar · CPU \(controller.temperatureText) · 电池区域 \(controller.batteryTemperatureText)\(fanDetails)"
       + (controller.menuBarHotspotAlertText.map { " · \($0)" } ?? "")
       + (controller.menuBarBatteryAlertText.map { " · \($0)" } ?? "")
   }

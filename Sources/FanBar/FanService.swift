@@ -30,7 +30,7 @@ actor FanService {
   func prepare(source: CPUTemperatureSource = .package) throws -> FanSnapshot {
     if !hardware.isOpen { try hardware.open() }
     count = try hardware.fanCount()
-    guard (1...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+    guard (0...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
     return try sample(source: source)
   }
 
@@ -108,7 +108,12 @@ actor FanService {
     if !hardware.isOpen {
       try hardware.open()
       count = try hardware.fanCount()
-      guard (1...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+      guard (0...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+    }
+
+    if count == 0 {
+      manualFans.removeAll()
+      return
     }
 
     var failures: [String] = []

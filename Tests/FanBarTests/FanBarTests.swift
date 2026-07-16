@@ -191,6 +191,35 @@ struct MenuBarDisplayModeTests {
     #expect(FanController.ControlState.automatic.menuBarSymbolName == "fan")
     #expect(FanController.ControlState.monitoring.menuBarSymbolName == "fan")
     #expect(FanController.ControlState.error.menuBarSymbolName == "fan")
+    #expect(
+      MenuBarPresentation.symbolName(state: .manual, hasControllableFans: false)
+        == "thermometer.medium")
+  }
+
+  @Test("fanless devices only offer temperature menu bar modes")
+  func fanlessMenuModes() {
+    #expect(MenuBarDisplayMode.available(hasControllableFans: false) == [.iconOnly, .temperature])
+    #expect(MenuBarDisplayMode.available(hasControllableFans: true) == MenuBarDisplayMode.allCases)
+  }
+
+  @Test("controller enters monitoring-only mode when hardware has no fans")
+  @MainActor
+  func fanlessControllerMode() async {
+    let hardware = MockFanHardware()
+    hardware.count = 0
+    hardware.sensorReadings = [TemperatureReading(key: "TB0T", value: 34)]
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600)
+
+    await controller.refresh()
+
+    #expect(controller.isFanless)
+    #expect(!controller.hasControllableFans)
+    #expect(controller.state == .monitoring)
+    #expect(controller.menuBarSymbolName == "thermometer.medium")
+    #expect(controller.availableMenuBarDisplayModes == [.iconOnly, .temperature])
+    #expect(controller.statusText.contains("仅监控") || controller.statusText.contains("监控温度"))
+    _ = await controller.shutdown()
   }
 
   @Test("popover height adapts to tab and sensor rows")
@@ -201,6 +230,8 @@ struct MenuBarDisplayModeTests {
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
     #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
     #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 620)
+    #expect(
+      PopoverTab.settings.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 500)
   }
 
   @Test("hotspot menu alert appears only above 90°C and includes its source")
@@ -262,6 +293,22 @@ struct CPUTemperatureSelectionTests {
 
 @Suite("Fan service transactions", .serialized)
 struct FanServiceTests {
+  @Test("zero-fan hardware remains available for temperature monitoring")
+  func fanlessHardwareCanMonitor() async throws {
+    let hardware = MockFanHardware()
+    hardware.count = 0
+    hardware.sensorReadings = [TemperatureReading(key: "TB0T", value: 34)]
+    let service = FanService(hardware: hardware)
+    let snapshot = try await service.prepare()
+    #expect(snapshot.fans.isEmpty)
+    #expect(snapshot.temperature == hardware.temperature)
+    #expect(snapshot.batteryTemperature == 34)
+
+    try await service.restoreAutomatic()
+    #expect(hardware.automaticWriteCount == 0)
+    #expect(hardware.resetCount == 0)
+  }
+
   @Test("sampling uses the hottest valid battery-area sensor")
   func samplesHottestBatterySensor() async throws {
     let hardware = MockFanHardware()

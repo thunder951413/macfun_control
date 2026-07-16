@@ -5,6 +5,12 @@ import OSLog
 @MainActor
 final class FanController: ObservableObject {
   private let logger = Logger(subsystem: "local.fanbar", category: "control")
+  enum FanCapability: Equatable {
+    case unknown
+    case available
+    case unavailable
+  }
+
   enum ControlState: Equatable {
     case starting
     case monitoring
@@ -49,6 +55,7 @@ final class FanController: ObservableObject {
   @Published private(set) var batteryCurveThreshold: Double
   @Published private(set) var temperatureSource: CPUTemperatureSource
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
+  @Published private(set) var fanCapability: FanCapability = .unknown
   let helperManager: PrivilegedHelperManager
   let launchAtLoginManager: LaunchAtLoginManager
 
@@ -76,6 +83,7 @@ final class FanController: ObservableObject {
   private var temperatureFilter = TemperatureSafetyFilter()
   private var batteryTemperatureFilter = TemperatureSafetyFilter(capacity: 3)
   private var dashboardRefreshCountdown = 0
+  private var didConfigureHelperForCapability = false
 
   init(
     service: FanService = FanService(),
@@ -142,6 +150,7 @@ final class FanController: ObservableObject {
   }
 
   var fanText: String {
+    if fanCapability == .unavailable { return "无风扇" }
     guard !fanReadings.isEmpty else { return "-- rpm" }
     if fanReadings.count == 1 { return "\(Int(fanReadings[0].actualRPM.rounded())) rpm" }
     let values = fanReadings.map { String(Int($0.actualRPM.rounded())) }.joined(separator: " / ")
@@ -163,12 +172,30 @@ final class FanController: ObservableObject {
       averageRPM.map { value in
         value >= 1_000 ? String(format: "%.1fk", value / 1_000) : "\(Int(value.rounded()))"
       } ?? "--"
-    return switch menuBarDisplayMode {
+    let effectiveMode =
+      hasControllableFans || menuBarDisplayMode == .iconOnly ? menuBarDisplayMode : .temperature
+    return switch effectiveMode {
     case .iconOnly: ""
     case .temperature: temperature
     case .fanSpeed: rpm
     case .temperatureAndFan: "\(temperature)  \(rpm)"
     }
+  }
+
+  var hasControllableFans: Bool { fanCapability == .available }
+  var isFanless: Bool { fanCapability == .unavailable }
+
+  var availableMenuBarDisplayModes: [MenuBarDisplayMode] {
+    MenuBarDisplayMode.available(hasControllableFans: !isFanless)
+  }
+
+  var menuBarSymbolName: String {
+    MenuBarPresentation.symbolName(state: state, hasControllableFans: !isFanless)
+  }
+
+  var menuBarAccessibilityDescription: String {
+    if isFanless { return "FanBar 温度监控" }
+    return state == .manual ? "FanBar 正在加速风扇" : "FanBar 系统自动风扇"
   }
 
   var menuBarHotspotAlertText: String? {
@@ -201,7 +228,8 @@ final class FanController: ObservableObject {
 
   var preferredPopoverHeight: Double {
     let groupCount = TemperatureSensorGroup.make(from: temperatureDashboard.readings).count
-    return selectedPopoverTab.preferredHeight(sensorGroupCount: groupCount)
+    return selectedPopoverTab.preferredHeight(
+      sensorGroupCount: groupCount, hasControllableFans: !isFanless)
   }
 
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
@@ -268,6 +296,11 @@ final class FanController: ObservableObject {
 
   func setControlEnabled(_ enabled: Bool) {
     guard enabled != isControlEnabled else { return }
+    guard !isFanless else {
+      isControlEnabled = false
+      statusText = "此设备没有可控风扇；仅监控温度与提醒"
+      return
+    }
     if enabled, !helperManager.isReady {
       helperManager.enable()
       statusText = "请先启用 FanBar 特权控制组件"
@@ -310,6 +343,7 @@ final class FanController: ObservableObject {
       currentBatteryTemperature = filteredBatteryTemperature
       currentBatterySource = rawSnapshot.batterySource
       fanReadings = rawSnapshot.fans
+      updateFanCapability(hasControllableFans: !rawSnapshot.fans.isEmpty)
       if dashboardRefreshCountdown <= 0 {
         if let dashboard = try? await service.temperatureDashboard() {
           temperatureDashboard = dashboard
@@ -323,6 +357,13 @@ final class FanController: ObservableObject {
         logger.notice("restore requested reason=unfinished-session")
         try await service.restoreAutomatic()
         setSessionActive(false)
+      }
+
+      guard hasControllableFans else {
+        targetRPMs = []
+        state = .monitoring
+        statusText = "此设备没有可控风扇；正在监控温度与提醒"
+        return
       }
 
       guard isControlEnabled else {
@@ -531,6 +572,27 @@ final class FanController: ObservableObject {
       let combinedTargets = zip(cpuTargets, batteryTargets).map(max)
       let batteryDominant = zip(cpuTargets, batteryTargets).contains { $1 > $0 }
       return (.manual(combinedTargets), batteryDominant)
+    }
+  }
+
+  private func updateFanCapability(hasControllableFans: Bool) {
+    let detected: FanCapability = hasControllableFans ? .available : .unavailable
+    guard fanCapability != detected else { return }
+    fanCapability = detected
+
+    if hasControllableFans {
+      if !didConfigureHelperForCapability {
+        didConfigureHelperForCapability = true
+        helperManager.enableIfNeeded()
+      }
+    } else {
+      isControlEnabled = false
+      targetRPMs = []
+      if menuBarDisplayMode == .fanSpeed || menuBarDisplayMode == .temperatureAndFan {
+        menuBarDisplayMode = .temperature
+        UserDefaults.standard.set(
+          MenuBarDisplayMode.temperature.rawValue, forKey: Self.menuBarDisplayKey)
+      }
     }
   }
 }
