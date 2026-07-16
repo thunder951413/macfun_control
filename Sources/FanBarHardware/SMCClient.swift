@@ -1,5 +1,5 @@
-import Foundation
 import FanBarC
+import Foundation
 import IOKit
 
 public enum CPUTemperatureSource: String, CaseIterable, Sendable {
@@ -28,6 +28,7 @@ public protocol FanHardware: Sendable {
   func cpuTemperature() throws -> Double
   func cpuTemperature(source: CPUTemperatureSource) throws -> Double
   func cpuHotspotReading() throws -> TemperatureReading
+  func batteryTemperatureReading() throws -> TemperatureReading
   func allTemperatureReadings() -> [TemperatureReading]
   func fanActualRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
@@ -49,6 +50,16 @@ extension FanHardware {
 
   public func cpuHotspotReading() throws -> TemperatureReading {
     TemperatureReading(key: "CPU hotspot", value: try cpuTemperature(source: .hotspot))
+  }
+
+  public func batteryTemperatureReading() throws -> TemperatureReading {
+    guard
+      let reading =
+        (allTemperatureReadings()
+          .filter { $0.key.hasPrefix("TB") && $0.value.isFinite && (10...80).contains($0.value) }
+          .max(by: { $0.value < $1.value }))
+    else { throw SMCClient.SMCError.noTemperatureKey }
+    return reading
   }
 }
 
@@ -214,7 +225,9 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       }
       value = Self.robustAverage(
         keys.compactMap { key in
-          guard let reading = try? readNumeric(key), (15...115).contains(reading) else { return nil }
+          guard let reading = try? readNumeric(key), (15...115).contains(reading) else {
+            return nil
+          }
           return reading
         })
     }
@@ -228,6 +241,23 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     guard let reading = firstValidTemperatureReading(["TCMz", "TCMb"]) else {
       throw SMCError.noTemperatureKey
     }
+    return reading
+  }
+
+  public func batteryTemperatureReading() throws -> TemperatureReading {
+    let discoveredKeys =
+      (try? allKeys())?.filter {
+        $0.count == 4 && $0.hasPrefix("TB") && $0.last == "T"
+      } ?? []
+    let keys = discoveredKeys.isEmpty ? ["TB0T", "TB1T", "TB2T"] : discoveredKeys
+    guard
+      let reading = keys.compactMap({ key -> TemperatureReading? in
+        guard let value = try? readNumeric(key), value.isFinite, (10...80).contains(value) else {
+          return nil
+        }
+        return TemperatureReading(key: key, value: value)
+      }).max(by: { $0.value < $1.value })
+    else { throw SMCError.noTemperatureKey }
     return reading
   }
 

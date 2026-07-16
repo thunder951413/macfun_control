@@ -37,6 +37,7 @@ actor FanService {
   func sample(source: CPUTemperatureSource = .package) throws -> FanSnapshot {
     guard hardware.isOpen else { return try prepare(source: source) }
     let hotspotReading = try? hardware.cpuHotspotReading()
+    let batteryReading = try? hardware.batteryTemperatureReading()
     let temperature =
       if source == .hotspot, let hotspotReading {
         hotspotReading.value
@@ -66,7 +67,8 @@ actor FanService {
     }
     return FanSnapshot(
       temperature: temperature, hotspotTemperature: hotspot,
-      hotspotSource: hotspotReading?.key, fans: fans)
+      hotspotSource: hotspotReading?.key, batteryTemperature: batteryReading?.value,
+      batterySource: batteryReading?.key, fans: fans)
   }
 
   func temperatureDashboard() throws -> TemperatureDashboard {

@@ -95,17 +95,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           attributes: [.foregroundColor: NSColor.labelColor]))
     }
     if let alert = controller.menuBarHotspotAlertText {
-      if !normalText.isEmpty { attributedTitle.append(NSAttributedString(string: "  ")) }
+      if attributedTitle.length > 0 { attributedTitle.append(NSAttributedString(string: "  ")) }
       attributedTitle.append(
         NSAttributedString(
           string: alert,
           attributes: [.foregroundColor: NSColor.systemRed]))
     }
+    if let alert = controller.menuBarBatteryAlertText {
+      if attributedTitle.length > 0 { attributedTitle.append(NSAttributedString(string: "  ")) }
+      attributedTitle.append(
+        NSAttributedString(
+          string: alert,
+          attributes: [.foregroundColor: NSColor.systemOrange]))
+    }
     button.attributedTitle = attributedTitle
     button.imagePosition = attributedTitle.length == 0 ? .imageOnly : .imageLeading
     button.toolTip =
-      "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
+      "FanBar · CPU \(controller.temperatureText) · 电池区域 \(controller.batteryTemperatureText) · \(controller.fanText)"
       + (controller.menuBarHotspotAlertText.map { " · \($0)" } ?? "")
+      + (controller.menuBarBatteryAlertText.map { " · \($0)" } ?? "")
   }
 
   private func updatePopoverSize() {
@@ -245,7 +253,12 @@ struct FanBarMain {
       try smc.open()
       defer { smc.close() }
       for source in CPUTemperatureSource.allCases {
-        print("source.\(source.rawValue)=\(String(format: "%.3f", try smc.cpuTemperature(source: source)))")
+        print(
+          "source.\(source.rawValue)=\(String(format: "%.3f", try smc.cpuTemperature(source: source)))"
+        )
+      }
+      if let battery = try? smc.batteryTemperatureReading() {
+        print("source.battery=\(battery.key):\(String(format: "%.3f", battery.value))")
       }
       let readings = smc.temperatureReadings()
       for reading in readings {

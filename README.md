@@ -6,6 +6,8 @@ Fan writes are performed by a separately signed, root LaunchDaemon registered wi
 
 The popover separates live sensor summaries from settings. Its General section controls menu bar content, the fan-curve temperature source, high-hotspot alerts, and the optional macOS login item. FanBar does not enable launch at login unless the user turns it on.
 
+Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0T`, `TB1T`, or `TB2T`). Users can configure a menu bar alert threshold and optionally enable a separate battery curve. CPU and battery curves are combined by taking the higher requested fan target; the battery curve reaches maximum speed at 50°C.
+
 ## Safety behavior
 
 - Fresh installs start in **monitor-only mode**. Fan writes require an explicit toggle.

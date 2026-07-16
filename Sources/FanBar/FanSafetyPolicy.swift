@@ -13,16 +13,61 @@ struct FanSnapshot: Sendable, Equatable {
   let temperature: Double
   let hotspotTemperature: Double?
   let hotspotSource: String?
+  let batteryTemperature: Double?
+  let batterySource: String?
   let fans: [FanReading]
 
   init(
     temperature: Double, hotspotTemperature: Double? = nil, hotspotSource: String? = nil,
-    fans: [FanReading]
+    batteryTemperature: Double? = nil, batterySource: String? = nil, fans: [FanReading]
   ) {
     self.temperature = temperature
     self.hotspotTemperature = hotspotTemperature
     self.hotspotSource = hotspotSource
+    self.batteryTemperature = batteryTemperature
+    self.batterySource = batterySource
     self.fans = fans
+  }
+}
+
+struct BatteryFanPolicy: Sendable {
+  static let thresholdRange = 30.0...45.0
+  static let defaultThreshold = 38.0
+  static let maximumTemperature = 50.0
+
+  let hysteresis: Double
+
+  init(hysteresis: Double = 2) {
+    self.hysteresis = hysteresis
+  }
+
+  func curveFraction(temperature: Double, threshold: Double) -> Double? {
+    let threshold = min(
+      max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
+    guard temperature > threshold else { return nil }
+    return min(1, max(0, (temperature - threshold) / (Self.maximumTemperature - threshold)))
+  }
+
+  func decision(
+    temperature: Double?, fans: [FanReading], threshold: Double, wasManual: Bool
+  ) -> FanSafetyPolicy.Decision {
+    guard let temperature, temperature.isFinite, (10...80).contains(temperature) else {
+      return .automatic
+    }
+    let threshold = min(
+      max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
+    let shouldBeManual =
+      wasManual ? temperature > threshold - hysteresis : temperature > threshold
+    guard shouldBeManual else { return .automatic }
+
+    let targets = fans.map { fan in
+      guard let progress = curveFraction(temperature: temperature, threshold: threshold) else {
+        return fan.actualRPM
+      }
+      let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
+      return min(fan.maximumRPM, max(fan.actualRPM, curveTarget))
+    }
+    return .manual(targets)
   }
 }
 
@@ -109,7 +154,8 @@ struct FanSafetyPolicy: Sendable {
     let threshold = min(
       max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
     let emergency = emergencyOverride ?? isEmergency(snapshot)
-    let shouldBeManual = emergency
+    let shouldBeManual =
+      emergency
       || (wasManual
         ? snapshot.temperature > threshold - hysteresis
         : snapshot.temperature > threshold)

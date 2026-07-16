@@ -232,6 +232,39 @@ struct FanPopoverView: View {
       }
       SectionDivider()
       SettingRow(
+        title: "电池高温提醒", subtitle: "电池区域最高温超过阈值时显示", symbol: "battery.75percent"
+      ) {
+        Toggle(
+          "电池高温提醒",
+          isOn: Binding(
+            get: { controller.showsBatteryMenuAlert },
+            set: { controller.setShowsBatteryMenuAlert($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(.switch)
+      }
+      if controller.showsBatteryMenuAlert {
+        SectionDivider()
+        SettingRow(
+          title: "电池提醒温度", subtitle: "采用三个电池区域传感器中的最高值",
+          symbol: "thermometer.medium"
+        ) {
+          HStack(spacing: 7) {
+            Slider(
+              value: Binding(
+                get: { controller.batteryAlertThreshold },
+                set: { controller.setBatteryAlertThreshold($0) }
+              ), in: BatteryTemperaturePreferences.alertRange, step: 1
+            )
+            Text("\(Int(controller.batteryAlertThreshold.rounded()))°C")
+              .font(.caption.monospacedDigit())
+              .frame(width: 34, alignment: .trailing)
+          }
+        }
+      }
+      SectionDivider()
+      SettingRow(
         title: "开机启动", subtitle: launchAtLoginSubtitle, symbol: "power"
       ) {
         HStack(spacing: 8) {
@@ -287,7 +320,7 @@ struct FanPopoverView: View {
         }
         SectionDivider()
         SettingRow(
-          title: "智能风扇曲线", subtitle: "高于设定温度时补充 macOS 调速",
+          title: "智能风扇曲线", subtitle: "CPU 与电池曲线取较高转速目标",
           symbol: "chart.line.uptrend.xyaxis"
         ) {
           Toggle(
@@ -301,11 +334,27 @@ struct FanPopoverView: View {
           .toggleStyle(.switch)
           .disabled(!helperManager.isReady)
         }
+        SectionDivider()
+        SettingRow(
+          title: "电池区域曲线", subtitle: "按电池区域最高温补充风扇转速",
+          symbol: "battery.75percent"
+        ) {
+          Toggle(
+            "电池区域曲线",
+            isOn: Binding(
+              get: { controller.isBatteryCurveEnabled },
+              set: { controller.setBatteryCurveEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(.switch)
+          .disabled(!helperManager.isReady || !controller.isControlEnabled)
+        }
       }
 
       VStack(alignment: .leading, spacing: 7) {
         HStack {
-          Text("开始加速温度")
+          Text("CPU 开始加速温度")
           Spacer()
           Text("\(Int(controller.thresholdCelsius.rounded()))°C")
             .font(.system(.title3, design: .rounded).monospacedDigit())
@@ -328,16 +377,55 @@ struct FanPopoverView: View {
       .padding(12)
       .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
       .disabled(!controller.isControlEnabled)
+
+      if controller.isBatteryCurveEnabled {
+        VStack(alignment: .leading, spacing: 7) {
+          HStack {
+            Text("电池区域开始加速温度")
+            Spacer()
+            Text("\(Int(controller.batteryCurveThreshold.rounded()))°C")
+              .font(.system(.title3, design: .rounded).monospacedDigit())
+              .fontWeight(.semibold)
+          }
+          Slider(
+            value: Binding(
+              get: { controller.batteryCurveThreshold },
+              set: { controller.setBatteryCurveThreshold($0) }
+            ), in: BatteryFanPolicy.thresholdRange, step: 1
+          )
+          .accessibilityLabel("电池区域开始加速温度")
+          Text("采用电池传感器最高值；超过设定温度后线性加速，50°C 时达到最大转速。")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
+        .disabled(!controller.isControlEnabled)
+      }
     }
   }
 
   private var curvePreview: some View {
     PopoverSection(title: "曲线预览", symbol: "chart.xyaxis.line") {
       FanCurvePreview(
+        name: "CPU",
         threshold: controller.thresholdCelsius,
         currentTemperature: controller.currentTemperature,
         curvePercent: controller.curvePercent,
+        domainMinimum: FanSafetyPolicy.thresholdRange.lowerBound,
+        maximumTemperature: 90,
+        color: .orange,
         isEnabled: controller.isControlEnabled)
+      SectionDivider()
+      FanCurvePreview(
+        name: "电池区域",
+        threshold: controller.batteryCurveThreshold,
+        currentTemperature: controller.currentBatteryTemperature,
+        curvePercent: controller.batteryCurvePercent,
+        domainMinimum: BatteryFanPolicy.thresholdRange.lowerBound,
+        maximumTemperature: BatteryFanPolicy.maximumTemperature,
+        color: .cyan,
+        isEnabled: controller.isControlEnabled && controller.isBatteryCurveEnabled)
     }
   }
 
@@ -394,16 +482,23 @@ private struct SensorGroupSummary: View {
         .frame(width: 16).foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 2) {
         Text(group.category.label).font(.caption)
-        Text("\(group.readings.count) 个传感器")
-          .font(.caption2).foregroundStyle(.secondary)
+        Text(
+          group.category == .battery
+            ? "\(group.readings.count) 个传感器 · 最高" : "\(group.readings.count) 个传感器"
+        )
+        .font(.caption2).foregroundStyle(.secondary)
       }
       Spacer(minLength: 3)
-      Text("\(Int(group.average.rounded()))°")
+      Text("\(Int(displayValue.rounded()))°")
         .font(.caption.monospacedDigit()).fontWeight(.medium)
     }
     .padding(7)
     .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+  }
+
+  private var displayValue: Double {
+    group.category == .battery ? group.maximum : group.average
   }
 }
 
@@ -468,16 +563,20 @@ private struct SectionDivider: View {
 }
 
 private struct FanCurvePreview: View {
+  let name: String
   let threshold: Double
   let currentTemperature: Double?
   let curvePercent: Int?
+  let domainMinimum: Double
+  let maximumTemperature: Double
+  let color: Color
   let isEnabled: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text(isEnabled ? "曲线已启用" : "曲线未启用")
-          .foregroundStyle(isEnabled ? .orange : .secondary)
+        Text("\(name) · \(isEnabled ? "曲线已启用" : "曲线未启用")")
+          .foregroundStyle(isEnabled ? color : .secondary)
         Spacer()
         if let currentTemperature {
           Text("当前 \(Int(currentTemperature.rounded()))°C").font(.caption).monospacedDigit()
@@ -492,7 +591,9 @@ private struct FanCurvePreview: View {
         let width = right - left
         let height = bottom - top
         func x(_ temperature: Double) -> Double {
-          left + min(1, max(0, (temperature - 40) / 50)) * width
+          left
+            + min(1, max(0, (temperature - domainMinimum) / (maximumTemperature - domainMinimum)))
+            * width
         }
         func y(_ fraction: Double) -> Double { bottom - min(1, max(0, fraction)) * height }
 
@@ -506,32 +607,33 @@ private struct FanCurvePreview: View {
         var curve = Path()
         curve.move(to: CGPoint(x: left, y: bottom))
         curve.addLine(to: CGPoint(x: x(threshold), y: bottom))
-        curve.addLine(to: CGPoint(x: x(90), y: top))
+        curve.addLine(to: CGPoint(x: x(maximumTemperature), y: top))
         context.stroke(
-          curve, with: .color(.orange), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+          curve, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
 
         if let currentTemperature {
           let fraction =
             currentTemperature <= threshold
-            ? 0 : min(1, (currentTemperature - threshold) / max(1, 90 - threshold))
+            ? 0
+            : min(1, (currentTemperature - threshold) / max(1, maximumTemperature - threshold))
           let point = CGPoint(x: x(currentTemperature), y: y(fraction))
           context.fill(
             Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
             with: .color(.white))
           context.stroke(
             Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
-            with: .color(.orange), lineWidth: 3)
+            with: .color(color), lineWidth: 3)
         }
       }
       .frame(height: 92)
       .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
 
       HStack {
-        Text("40°C")
+        Text("\(Int(domainMinimum))°C")
         Spacer()
         Text("\(Int(threshold))°C 开始")
         Spacer()
-        Text("90°C 最大")
+        Text("\(Int(maximumTemperature))°C 最大")
       }
       .font(.caption2.monospacedDigit())
       .foregroundStyle(.secondary)

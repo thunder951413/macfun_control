@@ -159,6 +159,20 @@ struct FanSafetyPolicyTests {
     #expect(policy.curveFraction(temperature: 90, threshold: 68) == 1)
     #expect(policy.curveFraction(temperature: 100, threshold: 68) == 1)
   }
+
+  @Test("battery curve starts at its threshold and reaches maximum at 50°C")
+  func batteryCurve() throws {
+    let batteryPolicy = BatteryFanPolicy()
+    let fan = FanReading(index: 0, actualRPM: 1_500, minimumRPM: 1_500, maximumRPM: 5_500)
+    #expect(batteryPolicy.curveFraction(temperature: 38, threshold: 38) == nil)
+    #expect(batteryPolicy.curveFraction(temperature: 44, threshold: 38) == 0.5)
+    #expect(batteryPolicy.curveFraction(temperature: 50, threshold: 38) == 1)
+    let targets = try #require(
+      manualTargets(
+        batteryPolicy.decision(
+          temperature: 44, fans: [fan], threshold: 38, wasManual: false)))
+    #expect(targets == [3_500])
+  }
 }
 
 @Suite("Menu bar display preferences")
@@ -209,6 +223,14 @@ struct MenuBarDisplayModeTests {
     #expect(LaunchAtLoginManager.state(for: .requiresApproval) == .approvalRequired)
     #expect(LaunchAtLoginManager.state(for: .notFound) == .unavailable)
   }
+
+  @Test("battery menu alert uses the configured threshold")
+  func batteryMenuAlertThreshold() {
+    #expect(BatteryMenuAlert.text(temperature: 40, threshold: 40) == nil)
+    #expect(
+      BatteryMenuAlert.text(temperature: 40.6, threshold: 40)
+        == "🔋 电池区域 41°")
+  }
 }
 
 @Suite("CPU temperature selection")
@@ -240,6 +262,20 @@ struct CPUTemperatureSelectionTests {
 
 @Suite("Fan service transactions", .serialized)
 struct FanServiceTests {
+  @Test("sampling uses the hottest valid battery-area sensor")
+  func samplesHottestBatterySensor() async throws {
+    let hardware = MockFanHardware()
+    hardware.sensorReadings = [
+      TemperatureReading(key: "TB0T", value: 33),
+      TemperatureReading(key: "TB1T", value: 37),
+      TemperatureReading(key: "TB2T", value: 35),
+      TemperatureReading(key: "TCMz", value: 80),
+    ]
+    let snapshot = try await FanService(hardware: hardware).prepare()
+    #expect(snapshot.batteryTemperature == 37)
+    #expect(snapshot.batterySource == "TB1T")
+  }
+
   @Test("partial multi-fan failure rolls back every fan")
   func partialFailureRollsBackEveryFan() async throws {
     let hardware = MockFanHardware()

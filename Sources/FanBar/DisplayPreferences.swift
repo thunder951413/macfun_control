@@ -51,6 +51,18 @@ enum HotspotMenuAlert {
   }
 }
 
+enum BatteryTemperaturePreferences {
+  static let alertRange = 30.0...50.0
+  static let defaultAlertThreshold = 40.0
+}
+
+enum BatteryMenuAlert {
+  static func text(temperature: Double?, threshold: Double) -> String? {
+    guard let temperature, temperature.isFinite, temperature > threshold else { return nil }
+    return "🔋 电池区域 \(Int(temperature.rounded()))°"
+  }
+}
+
 extension CPUTemperatureSource: Identifiable {
   public var id: String { rawValue }
 
