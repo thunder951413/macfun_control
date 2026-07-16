@@ -49,7 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard !isTerminating else { return .terminateNow }
+    // A second quit request must not bypass an in-flight safety restore.
+    // AppKit will terminate after the first restore task replies below.
+    guard !isTerminating else { return .terminateLater }
     isTerminating = true
     Task { @MainActor in
       let restored = await controller.shutdown()

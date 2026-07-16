@@ -365,6 +365,25 @@ struct FanServiceTests {
     #expect(manual)
   }
 
+  @Test("controller shutdown returns every fan to macOS automatic control")
+  @MainActor
+  func controllerShutdownRestoresAutomaticControl() async throws {
+    let hardware = MockFanHardware()
+    let service = FanService(hardware: hardware)
+    let snapshot = try await service.prepare()
+    try await service.apply(targets: [4_000, 4_100], snapshot: snapshot)
+    hardware.overrideActive = true
+    let controller = FanController(service: service, pollInterval: 3_600)
+
+    let restored = await controller.shutdown()
+
+    #expect(restored)
+    #expect(hardware.modes == [0, 0])
+    #expect(!hardware.overrideActive)
+    #expect(hardware.resetCount == 1)
+    #expect(controller.targetRPMs.isEmpty)
+  }
+
   @Test("recovery restore opens hardware after a previous crash")
   func recoveryRestoreOpensHardware() async throws {
     let hardware = MockFanHardware()

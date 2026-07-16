@@ -47,9 +47,49 @@ private final class HelperService: NSObject, FanBarHelperProtocol, @unchecked Se
   func restoreAll() {
     logger.notice("restoreAll requested by connection lifecycle")
     queue.async {
-      guard (try? self.ensureOpen()) != nil, let count = try? self.smc.fanCount() else { return }
-      for index in 0..<count { try? self.smc.setAutomaticMode(fan: index) }
-      try? self.smc.resetControlOverride()
+      var lastFailures: [String] = []
+      for attempt in 1...3 {
+        lastFailures = self.restoreAllOnce()
+        if lastFailures.isEmpty {
+          self.logger.notice(
+            "restored macOS fan control after client exit attempt=\(attempt, privacy: .public)"
+          )
+          return
+        }
+        if attempt < 3 { Thread.sleep(forTimeInterval: 0.15) }
+      }
+      self.logger.fault(
+        "failed to restore macOS fan control after client exit: \(lastFailures.joined(separator: "; "), privacy: .public)"
+      )
+    }
+  }
+
+  private func restoreAllOnce() -> [String] {
+    do {
+      try ensureOpen()
+      let count = try smc.fanCount()
+      var failures: [String] = []
+      for index in 0..<count {
+        do {
+          let mode = try smc.fanMode(fan: index)
+          if mode != 0, mode != 3 { try smc.setAutomaticMode(fan: index) }
+          let restoredMode = try smc.fanMode(fan: index)
+          if restoredMode != 0, restoredMode != 3 {
+            failures.append("fan \(index + 1) remains manual")
+          }
+        } catch {
+          failures.append("fan \(index + 1): \(error.localizedDescription)")
+        }
+      }
+      do {
+        if try smc.controlOverrideActive() { try smc.resetControlOverride() }
+        if try smc.controlOverrideActive() { failures.append("override remains active") }
+      } catch {
+        failures.append("override: \(error.localizedDescription)")
+      }
+      return failures
+    } catch {
+      return [error.localizedDescription]
     }
   }
 

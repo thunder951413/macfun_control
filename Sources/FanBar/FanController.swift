@@ -496,6 +496,8 @@ final class FanController: ObservableObject {
     batteryTemperatureFilter.reset()
     timer?.invalidate()
     timer = nil
+    state = .suspended
+    statusText = "正在退出并交还 macOS 风扇控制…"
     if let error = await attemptSafetyRestore() {
       state = .error
       statusText = "警告：无法恢复系统控制，已取消退出。\(error.localizedDescription)"
@@ -503,6 +505,7 @@ final class FanController: ObservableObject {
       scheduleTimer()
       return false
     }
+    targetRPMs = []
     await service.close()
     return true
   }
