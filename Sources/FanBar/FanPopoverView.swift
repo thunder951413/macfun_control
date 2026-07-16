@@ -65,6 +65,7 @@ struct FanPopoverView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         menuBarSettings
+        batterySettings
         controls
         curvePreview
         safetyNote
@@ -232,39 +233,6 @@ struct FanPopoverView: View {
       }
       SectionDivider()
       SettingRow(
-        title: "电池高温提醒", subtitle: "电池区域最高温超过阈值时显示", symbol: "battery.75percent"
-      ) {
-        Toggle(
-          "电池高温提醒",
-          isOn: Binding(
-            get: { controller.showsBatteryMenuAlert },
-            set: { controller.setShowsBatteryMenuAlert($0) }
-          )
-        )
-        .labelsHidden()
-        .toggleStyle(.switch)
-      }
-      if controller.showsBatteryMenuAlert {
-        SectionDivider()
-        SettingRow(
-          title: "电池提醒温度", subtitle: "采用三个电池区域传感器中的最高值",
-          symbol: "thermometer.medium"
-        ) {
-          HStack(spacing: 7) {
-            Slider(
-              value: Binding(
-                get: { controller.batteryAlertThreshold },
-                set: { controller.setBatteryAlertThreshold($0) }
-              ), in: BatteryTemperaturePreferences.alertRange, step: 1
-            )
-            Text("\(Int(controller.batteryAlertThreshold.rounded()))°C")
-              .font(.caption.monospacedDigit())
-              .frame(width: 34, alignment: .trailing)
-          }
-        }
-      }
-      SectionDivider()
-      SettingRow(
         title: "开机启动", subtitle: launchAtLoginSubtitle, symbol: "power"
       ) {
         HStack(spacing: 8) {
@@ -284,6 +252,70 @@ struct FanPopoverView: View {
           .disabled(launchAtLoginManager.state == .unavailable)
         }
       }
+    }
+  }
+
+  private var batterySettings: some View {
+    PopoverSection(title: "电池温度", symbol: "battery.75percent") {
+      SettingRow(
+        title: "当前区域最高温", subtitle: "三个电池区域传感器中的最高值", symbol: "sensor"
+      ) {
+        Text(controller.batteryTemperatureText)
+          .font(.system(.callout, design: .rounded).monospacedDigit())
+          .fontWeight(.semibold)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "菜单栏高温提醒", subtitle: "超过阈值时显示电池图标和温度",
+        symbol: "exclamationmark.triangle"
+      ) {
+        Toggle(
+          "菜单栏高温提醒",
+          isOn: Binding(
+            get: { controller.showsBatteryMenuAlert },
+            set: { controller.setShowsBatteryMenuAlert($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(.switch)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "提醒温度", subtitle: "可设置 30–50°C", symbol: "thermometer.medium"
+      ) {
+        BatteryTemperatureSlider(
+          value: Binding(
+            get: { controller.batteryAlertThreshold },
+            set: { controller.setBatteryAlertThreshold($0) }
+          ), range: BatteryTemperaturePreferences.alertRange)
+      }
+      .disabled(!controller.showsBatteryMenuAlert)
+      SectionDivider()
+      SettingRow(
+        title: "影响风扇转速", subtitle: "与 CPU 曲线比较并采用较高目标", symbol: "fan"
+      ) {
+        Toggle(
+          "影响风扇转速",
+          isOn: Binding(
+            get: { controller.isBatteryCurveEnabled },
+            set: { controller.setBatteryCurveEnabled($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(.switch)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "曲线介入温度", subtitle: "超过后线性加速，50°C 达到最大转速",
+        symbol: "chart.line.uptrend.xyaxis"
+      ) {
+        BatteryTemperatureSlider(
+          value: Binding(
+            get: { controller.batteryCurveThreshold },
+            set: { controller.setBatteryCurveThreshold($0) }
+          ), range: BatteryFanPolicy.thresholdRange)
+      }
+      .disabled(!controller.isBatteryCurveEnabled)
     }
   }
 
@@ -334,22 +366,6 @@ struct FanPopoverView: View {
           .toggleStyle(.switch)
           .disabled(!helperManager.isReady)
         }
-        SectionDivider()
-        SettingRow(
-          title: "电池区域曲线", subtitle: "按电池区域最高温补充风扇转速",
-          symbol: "battery.75percent"
-        ) {
-          Toggle(
-            "电池区域曲线",
-            isOn: Binding(
-              get: { controller.isBatteryCurveEnabled },
-              set: { controller.setBatteryCurveEnabled($0) }
-            )
-          )
-          .labelsHidden()
-          .toggleStyle(.switch)
-          .disabled(!helperManager.isReady || !controller.isControlEnabled)
-        }
       }
 
       VStack(alignment: .leading, spacing: 7) {
@@ -378,30 +394,6 @@ struct FanPopoverView: View {
       .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
       .disabled(!controller.isControlEnabled)
 
-      if controller.isBatteryCurveEnabled {
-        VStack(alignment: .leading, spacing: 7) {
-          HStack {
-            Text("电池区域开始加速温度")
-            Spacer()
-            Text("\(Int(controller.batteryCurveThreshold.rounded()))°C")
-              .font(.system(.title3, design: .rounded).monospacedDigit())
-              .fontWeight(.semibold)
-          }
-          Slider(
-            value: Binding(
-              get: { controller.batteryCurveThreshold },
-              set: { controller.setBatteryCurveThreshold($0) }
-            ), in: BatteryFanPolicy.thresholdRange, step: 1
-          )
-          .accessibilityLabel("电池区域开始加速温度")
-          Text("采用电池传感器最高值；超过设定温度后线性加速，50°C 时达到最大转速。")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(12)
-        .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
-        .disabled(!controller.isControlEnabled)
-      }
     }
   }
 
@@ -559,6 +551,25 @@ private struct SettingRow<Control: View>: View {
 private struct SectionDivider: View {
   var body: some View {
     Divider().padding(.leading, 35)
+  }
+}
+
+private struct BatteryTemperatureSlider: View {
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Slider(
+        value: $value,
+        in: range,
+        step: 1
+      )
+      .accessibilityLabel("温度")
+      Text("\(Int(value.rounded()))°C")
+        .font(.caption.monospacedDigit())
+        .frame(width: 34, alignment: .trailing)
+    }
   }
 }
 
