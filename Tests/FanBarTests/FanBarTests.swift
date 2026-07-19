@@ -256,14 +256,21 @@ struct MenuBarDisplayModeTests {
 
   @Test("popover height adapts to tab and sensor rows")
   func popoverHeightAdapts() {
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 390)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 510)
     #expect(
       PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 620)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 7) == 628)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 700)
+    #expect(
+      PopoverTab.sensors.preferredHeight(
+        sensorGroupCount: 2, hasControllableFans: false) == 500)
     #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 620)
     #expect(
       PopoverTab.settings.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 500)
+    #expect(PopoverSizing.height(preferred: 628, visibleScreenHeight: 900) == 628)
+    #expect(PopoverSizing.height(preferred: 700, visibleScreenHeight: 600) == 568)
+    #expect(PopoverSizing.height(preferred: 628, visibleScreenHeight: nil) == 628)
   }
 
   @Test("hotspot menu alert appears only above 90°C and includes its source")

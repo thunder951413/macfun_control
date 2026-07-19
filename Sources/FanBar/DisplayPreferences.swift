@@ -38,12 +38,25 @@ enum PopoverTab: String, Hashable {
     switch self {
     case .sensors:
       let rows = max(1, Int(ceil(Double(sensorGroupCount) / 2)))
-      let baseHeight = hasControllableFans ? 220.0 : 160.0
-      let minimumHeight = hasControllableFans ? 390.0 : 350.0
-      return min(620, max(minimumHeight, baseHeight + Double(rows) * 68))
+      // Include popover chrome, fan/fanless status, the primary-temperature
+      // cards, section headings, padding, and the two-column sensor rows.
+      // The previous base omitted most of that fixed content and clipped the
+      // last rows even though the row-count calculation itself was correct.
+      let baseHeight = hasControllableFans ? 356.0 : 348.0
+      let minimumHeight = hasControllableFans ? 510.0 : 500.0
+      return min(700, max(minimumHeight, baseHeight + Double(rows) * 68))
     case .settings:
       return hasControllableFans ? 620 : 500
     }
+  }
+}
+
+enum PopoverSizing {
+  static func height(preferred: Double, visibleScreenHeight: Double?) -> Double {
+    guard let visibleScreenHeight, visibleScreenHeight.isFinite, visibleScreenHeight > 0 else {
+      return preferred
+    }
+    return min(preferred, max(350, visibleScreenHeight - 32))
   }
 }
 

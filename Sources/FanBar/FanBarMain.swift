@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     updateStatusItem()
 
     popover.behavior = .transient
-    popover.contentSize = NSSize(width: 520, height: controller.preferredPopoverHeight)
+    popover.contentSize = NSSize(width: 520, height: desiredPopoverHeight)
     popover.contentViewController = NSHostingController(
       rootView: FanPopoverView(controller: controller))
 
@@ -118,9 +118,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func updatePopoverSize() {
-    let desiredSize = NSSize(width: 520, height: controller.preferredPopoverHeight)
+    let desiredSize = NSSize(width: 520, height: desiredPopoverHeight)
     guard popover.contentSize != desiredSize else { return }
     popover.contentSize = desiredSize
+  }
+
+  private var desiredPopoverHeight: Double {
+    let visibleScreenHeight = statusItem?.button?.window?.screen.map {
+      Double($0.visibleFrame.height)
+    }
+    return PopoverSizing.height(
+      preferred: controller.preferredPopoverHeight,
+      visibleScreenHeight: visibleScreenHeight)
   }
 }
 
