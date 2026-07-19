@@ -1,5 +1,20 @@
 import Foundation
 
+enum FanAccelerationProfile {
+  static let range = 0.5...2.0
+  static let defaultFactor = 1.0
+
+  static func clamp(_ factor: Double) -> Double {
+    min(max(factor, range.lowerBound), range.upperBound)
+  }
+
+  static func adjustedFraction(_ fraction: Double, factor: Double) -> Double {
+    let fraction = min(max(fraction, 0), 1)
+    guard fraction > 0, fraction < 1 else { return fraction }
+    return pow(fraction, 1 / clamp(factor))
+  }
+}
+
 struct FanReading: Sendable, Equatable, Identifiable {
   let index: Int
   let actualRPM: Double
@@ -41,15 +56,21 @@ struct BatteryFanPolicy: Sendable {
     self.hysteresis = hysteresis
   }
 
-  func curveFraction(temperature: Double, threshold: Double) -> Double? {
+  func curveFraction(
+    temperature: Double, threshold: Double,
+    accelerationFactor: Double = FanAccelerationProfile.defaultFactor
+  ) -> Double? {
     let threshold = min(
       max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
     guard temperature > threshold else { return nil }
-    return min(1, max(0, (temperature - threshold) / (Self.maximumTemperature - threshold)))
+    let fraction = min(
+      1, max(0, (temperature - threshold) / (Self.maximumTemperature - threshold)))
+    return FanAccelerationProfile.adjustedFraction(fraction, factor: accelerationFactor)
   }
 
   func decision(
-    temperature: Double?, fans: [FanReading], threshold: Double, wasManual: Bool
+    temperature: Double?, fans: [FanReading], threshold: Double, wasManual: Bool,
+    accelerationFactor: Double = FanAccelerationProfile.defaultFactor
   ) -> FanSafetyPolicy.Decision {
     guard let temperature, temperature.isFinite, (10...80).contains(temperature) else {
       return .automatic
@@ -61,7 +82,11 @@ struct BatteryFanPolicy: Sendable {
     guard shouldBeManual else { return .automatic }
 
     let targets = fans.map { fan in
-      guard let progress = curveFraction(temperature: temperature, threshold: threshold) else {
+      guard
+        let progress = curveFraction(
+          temperature: temperature, threshold: threshold,
+          accelerationFactor: accelerationFactor)
+      else {
         return fan.actualRPM
       }
       let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
@@ -139,17 +164,22 @@ struct FanSafetyPolicy: Sendable {
     snapshot.temperature >= emergencyTemperature
   }
 
-  func curveFraction(temperature: Double, threshold: Double) -> Double? {
+  func curveFraction(
+    temperature: Double, threshold: Double,
+    accelerationFactor: Double = FanAccelerationProfile.defaultFactor
+  ) -> Double? {
     let threshold = min(
       max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
     guard temperature > threshold else { return nil }
     let span = max(1, emergencyTemperature - threshold)
-    return min(1, max(0, (temperature - threshold) / span))
+    let fraction = min(1, max(0, (temperature - threshold) / span))
+    return FanAccelerationProfile.adjustedFraction(fraction, factor: accelerationFactor)
   }
 
   func decision(
     for snapshot: FanSnapshot, threshold: Double, wasManual: Bool,
-    emergencyOverride: Bool? = nil
+    emergencyOverride: Bool? = nil,
+    accelerationFactor: Double = FanAccelerationProfile.defaultFactor
   ) -> Decision {
     let threshold = min(
       max(threshold, Self.thresholdRange.lowerBound), Self.thresholdRange.upperBound)
@@ -166,7 +196,8 @@ struct FanSafetyPolicy: Sendable {
       if emergency { return fan.maximumRPM }
       guard
         let progress = curveFraction(
-          temperature: snapshot.temperature, threshold: threshold)
+          temperature: snapshot.temperature, threshold: threshold,
+          accelerationFactor: accelerationFactor)
       else { return fan.actualRPM }
       let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
 

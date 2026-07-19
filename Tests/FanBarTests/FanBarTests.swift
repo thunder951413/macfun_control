@@ -160,6 +160,38 @@ struct FanSafetyPolicyTests {
     #expect(policy.curveFraction(temperature: 100, threshold: 68) == 1)
   }
 
+  @Test("acceleration factor reshapes the curve smoothly without moving endpoints")
+  func accelerationFactorReshapesCurve() throws {
+    #expect(FanAccelerationProfile.clamp(0.1) == 0.5)
+    #expect(FanAccelerationProfile.clamp(3) == 2)
+    #expect(FanAccelerationProfile.adjustedFraction(0, factor: 2) == 0)
+    #expect(FanAccelerationProfile.adjustedFraction(1, factor: 0.5) == 1)
+
+    let gentle = try #require(
+      policy.curveFraction(temperature: 79, threshold: 68, accelerationFactor: 0.5))
+    let standard = try #require(
+      policy.curveFraction(temperature: 79, threshold: 68, accelerationFactor: 1))
+    let strong = try #require(
+      policy.curveFraction(temperature: 79, threshold: 68, accelerationFactor: 2))
+    #expect(gentle == 0.25)
+    #expect(standard == 0.5)
+    #expect(abs(strong * strong - 0.5) < 0.000_001)
+  }
+
+  @Test("acceleration factor changes targets while the slew limiter remains authoritative")
+  func accelerationFactorStillUsesSlewLimiter() throws {
+    let fan = FanReading(index: 0, actualRPM: 2_000, minimumRPM: 1_500, maximumRPM: 6_000)
+    let snapshot = FanSnapshot(temperature: 79, fans: [fan])
+    let desired = try #require(
+      manualTargets(
+        policy.decision(
+          for: snapshot, threshold: 68, wasManual: false, accelerationFactor: 2)))
+    #expect(desired[0] > 4_500)
+    let limited = FanTargetSlewLimiter().limit(
+      desired: desired, previous: [2_000], fans: [fan], interval: 2, bypass: false)
+    #expect(limited == [2_500])
+  }
+
   @Test("battery curve starts at its threshold and reaches maximum at 50°C")
   func batteryCurve() throws {
     let batteryPolicy = BatteryFanPolicy()

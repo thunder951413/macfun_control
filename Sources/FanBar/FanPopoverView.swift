@@ -414,6 +414,18 @@ struct FanPopoverView: View {
           .toggleStyle(.switch)
           .disabled(!helperManager.isReady)
         }
+        SectionDivider()
+        SettingRow(
+          title: "风扇加速系数", subtitle: "0.5× 柔和 · 1.0× 标准 · 2.0× 强劲，转速保持平滑",
+          symbol: "gauge.with.dots.needle.67percent"
+        ) {
+          FanAccelerationSlider(
+            value: Binding(
+              get: { controller.fanAccelerationFactor },
+              set: { controller.setFanAccelerationFactor($0) }
+            ))
+        }
+        .disabled(!controller.isControlEnabled)
       }
 
       VStack(alignment: .leading, spacing: 7) {
@@ -454,6 +466,7 @@ struct FanPopoverView: View {
         curvePercent: controller.curvePercent,
         domainMinimum: FanSafetyPolicy.thresholdRange.lowerBound,
         maximumTemperature: 90,
+        accelerationFactor: controller.fanAccelerationFactor,
         color: .orange,
         isEnabled: controller.isControlEnabled)
       SectionDivider()
@@ -464,6 +477,7 @@ struct FanPopoverView: View {
         curvePercent: controller.batteryCurvePercent,
         domainMinimum: BatteryFanPolicy.thresholdRange.lowerBound,
         maximumTemperature: BatteryFanPolicy.maximumTemperature,
+        accelerationFactor: controller.fanAccelerationFactor,
         color: .cyan,
         isEnabled: controller.isControlEnabled && controller.isBatteryCurveEnabled)
     }
@@ -621,6 +635,20 @@ private struct BatteryTemperatureSlider: View {
   }
 }
 
+private struct FanAccelerationSlider: View {
+  @Binding var value: Double
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Slider(value: $value, in: FanAccelerationProfile.range, step: 0.1)
+        .accessibilityLabel("风扇加速系数")
+      Text(String(format: "%.1f×", value))
+        .font(.caption.monospacedDigit())
+        .frame(width: 36, alignment: .trailing)
+    }
+  }
+}
+
 private struct FanCurvePreview: View {
   let name: String
   let threshold: Double
@@ -628,6 +656,7 @@ private struct FanCurvePreview: View {
   let curvePercent: Int?
   let domainMinimum: Double
   let maximumTemperature: Double
+  let accelerationFactor: Double
   let color: Color
   let isEnabled: Bool
 
@@ -666,7 +695,14 @@ private struct FanCurvePreview: View {
         var curve = Path()
         curve.move(to: CGPoint(x: left, y: bottom))
         curve.addLine(to: CGPoint(x: x(threshold), y: bottom))
-        curve.addLine(to: CGPoint(x: x(maximumTemperature), y: top))
+        let sampleCount = 32
+        for sample in 1...sampleCount {
+          let rawFraction = Double(sample) / Double(sampleCount)
+          let temperature = threshold + (maximumTemperature - threshold) * rawFraction
+          let adjustedFraction = FanAccelerationProfile.adjustedFraction(
+            rawFraction, factor: accelerationFactor)
+          curve.addLine(to: CGPoint(x: x(temperature), y: y(adjustedFraction)))
+        }
         context.stroke(
           curve, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
 
@@ -674,7 +710,11 @@ private struct FanCurvePreview: View {
           let fraction =
             currentTemperature <= threshold
             ? 0
-            : min(1, (currentTemperature - threshold) / max(1, maximumTemperature - threshold))
+            : FanAccelerationProfile.adjustedFraction(
+              min(
+                1,
+                (currentTemperature - threshold) / max(1, maximumTemperature - threshold)),
+              factor: accelerationFactor)
           let point = CGPoint(x: x(currentTemperature), y: y(fraction))
           context.fill(
             Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
@@ -696,6 +736,10 @@ private struct FanCurvePreview: View {
       }
       .font(.caption2.monospacedDigit())
       .foregroundStyle(.secondary)
+
+      Text("加速系数 " + String(format: "%.1f×", accelerationFactor))
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
 
       if let currentTemperature {
         if let curvePercent {

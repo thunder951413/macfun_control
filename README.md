@@ -8,6 +8,8 @@ The popover separates live sensor summaries from settings. Its General section c
 
 Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0T`, `TB1T`, or `TB2T`). Users can configure a menu bar alert threshold and optionally enable a separate battery curve. CPU and battery curves are combined by taking the higher requested fan target; the battery curve reaches maximum speed at 50°C.
 
+The shared 0.5×–2.0× acceleration factor smoothly reshapes both curves without changing their start or maximum-temperature endpoints. Physical RPM changes still pass through the asymmetric slew limiter, so changing the factor cannot make normal control jump directly to a new target.
+
 Fan capability is detected from AppleSMC rather than a model-name list. When `FNum` reports zero controllable fans, FanBar enters temperature-only monitoring mode: it uses a thermometer menu bar icon, removes fan-speed display modes and every fan-control curve, skips privileged-helper registration, and keeps sensor monitoring plus CPU and battery alerts available.
 
 ## Safety behavior
@@ -16,6 +18,7 @@ Fan capability is detected from AppleSMC rather than a model-name list. When `FN
 - Manual control starts only above the selected 40–80°C threshold.
 - A 3°C hysteresis band prevents repeated mode switching near the threshold.
 - A manual target is never lower than the fan's current speed.
+- The acceleration factor reshapes desired targets while the asymmetric RPM slew limiter remains authoritative.
 - At 90°C, FanBar requests the hardware-reported maximum speed.
 - Invalid sensor data, partial multi-fan writes, sleep, disabling control, and normal quit all trigger an automatic-mode restore.
 - Restore first reads the current mode and performs no write when macOS already owns the fans.
@@ -23,7 +26,7 @@ Fan capability is detected from AppleSMC rather than a model-name list. When `FN
 - The helper accepts only the signed FanBar client from the same Apple Developer team and validates fan indices and RPM ranges again before writing.
 - If automatic control cannot be restored, FanBar shows an alert and cancels normal termination so it can retry.
 
-> AppleSMC is a private, model-dependent interface. FanBar validates all values it uses, probes mode-key variants, supports legacy `fpe2` and Apple Silicon little-endian float values, and verifies writes. It still cannot guarantee compatibility with every Mac or protect against force-quit, process crashes, firmware faults, or another fan-control tool. Do not run multiple fan-control apps together.
+> AppleSMC is a private, model-dependent interface. FanBar validates all values it uses, probes mode-key variants, supports legacy `fpe2` and Apple Silicon little-endian float values, and verifies writes. The helper restores automatic control when the app disconnects, including force-quit and process crashes, but FanBar still cannot guarantee compatibility with every Mac or protect against firmware faults or another fan-control tool. Do not run multiple fan-control apps together.
 
 ## Build and test
 

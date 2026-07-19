@@ -53,6 +53,7 @@ final class FanController: ObservableObject {
   @Published private(set) var batteryAlertThreshold: Double
   @Published private(set) var isBatteryCurveEnabled: Bool
   @Published private(set) var batteryCurveThreshold: Double
+  @Published private(set) var fanAccelerationFactor: Double
   @Published private(set) var temperatureSource: CPUTemperatureSource
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   @Published private(set) var fanCapability: FanCapability = .unknown
@@ -68,6 +69,7 @@ final class FanController: ObservableObject {
   private static let batteryAlertThresholdKey = "batteryAlertThreshold"
   private static let batteryCurveEnabledKey = "batteryCurveEnabled"
   private static let batteryCurveThresholdKey = "batteryCurveThreshold"
+  private static let fanAccelerationFactorKey = "fanAccelerationFactor"
   private static let temperatureSourceKey = "temperatureSource"
   private let service: FanService
   private let policy: FanSafetyPolicy
@@ -136,6 +138,10 @@ final class FanController: ObservableObject {
         savedBatteryCurveThreshold ?? BatteryFanPolicy.defaultThreshold,
         BatteryFanPolicy.thresholdRange.lowerBound),
       BatteryFanPolicy.thresholdRange.upperBound)
+    let savedAccelerationFactor =
+      defaults.object(forKey: Self.fanAccelerationFactorKey) as? Double
+    fanAccelerationFactor = FanAccelerationProfile.clamp(
+      savedAccelerationFactor ?? FanAccelerationProfile.defaultFactor)
     temperatureSource =
       CPUTemperatureSource(
         rawValue: defaults.string(forKey: Self.temperatureSourceKey) ?? "") ?? .package
@@ -213,7 +219,8 @@ final class FanController: ObservableObject {
   var curvePercent: Int? {
     guard let currentTemperature,
       let fraction = policy.curveFraction(
-        temperature: currentTemperature, threshold: thresholdCelsius)
+        temperature: currentTemperature, threshold: thresholdCelsius,
+        accelerationFactor: fanAccelerationFactor)
     else { return nil }
     return Int((fraction * 100).rounded())
   }
@@ -221,7 +228,8 @@ final class FanController: ObservableObject {
   var batteryCurvePercent: Int? {
     guard let currentBatteryTemperature,
       let fraction = batteryPolicy.curveFraction(
-        temperature: currentBatteryTemperature, threshold: batteryCurveThreshold)
+        temperature: currentBatteryTemperature, threshold: batteryCurveThreshold,
+        accelerationFactor: fanAccelerationFactor)
     else { return nil }
     return Int((fraction * 100).rounded())
   }
@@ -266,6 +274,12 @@ final class FanController: ObservableObject {
       max(value, BatteryFanPolicy.thresholdRange.lowerBound),
       BatteryFanPolicy.thresholdRange.upperBound)
     UserDefaults.standard.set(batteryCurveThreshold, forKey: Self.batteryCurveThresholdKey)
+  }
+
+  func setFanAccelerationFactor(_ value: Double) {
+    fanAccelerationFactor = FanAccelerationProfile.clamp(value)
+    UserDefaults.standard.set(fanAccelerationFactor, forKey: Self.fanAccelerationFactorKey)
+    Task { await refresh() }
   }
 
   func setPopoverTab(_ tab: PopoverTab) {
@@ -386,12 +400,13 @@ final class FanController: ObservableObject {
         && (rawSnapshot.batteryTemperature ?? 0) >= BatteryFanPolicy.maximumTemperature
       let cpuDecision = policy.decision(
         for: snapshot, threshold: thresholdCelsius, wasManual: wasManual,
-        emergencyOverride: cpuEmergency)
+        emergencyOverride: cpuEmergency, accelerationFactor: fanAccelerationFactor)
       let batteryDecision =
         isBatteryCurveEnabled
         ? batteryPolicy.decision(
           temperature: snapshot.batteryTemperature, fans: snapshot.fans,
-          threshold: batteryCurveThreshold, wasManual: wasManual)
+          threshold: batteryCurveThreshold, wasManual: wasManual,
+          accelerationFactor: fanAccelerationFactor)
         : .automatic
       let combined = combine(cpu: cpuDecision, battery: batteryDecision)
       switch combined.decision {
