@@ -92,6 +92,7 @@ final class FanController: ObservableObject {
   private var didConfigureHelperForCapability = false
   private var previousExternalPowerConnected: Bool?
   private var powerConnectionNoticeTask: Task<Void, Never>?
+  private var manualControlStartedAt: Date?
 
   init(
     service: FanService = FanService(),
@@ -462,6 +463,22 @@ final class FanController: ObservableObject {
       let batteryEmergency =
         isBatteryCurveEnabled
         && (rawSnapshot.batteryTemperature ?? 0) >= BatteryFanPolicy.maximumTemperature
+      if wasManual, !cpuEmergency, !batteryEmergency,
+        ManualControlSafety.shouldAudit(startedAt: manualControlStartedAt)
+      {
+        logger.notice("restore requested reason=periodic-system-demand-audit")
+        try await service.restoreAutomatic()
+        setSessionActive(false)
+        consecutiveCoolSamples = 0
+        targetRPMs = []
+        state = .automatic
+        statusText = "正在让 macOS 复核系统散热需求"
+        Task { @MainActor [weak self] in
+          try? await Task.sleep(for: .milliseconds(750))
+          await self?.refresh()
+        }
+        return
+      }
       let cpuDecision = policy.decision(
         for: snapshot, threshold: thresholdCelsius, wasManual: wasManual,
         emergencyOverride: cpuEmergency, accelerationFactor: fanAccelerationFactor)
@@ -492,7 +509,14 @@ final class FanController: ObservableObject {
         consecutiveCoolSamples = 0
         targetRPMs = []
         state = .automatic
-        statusText = "低于设定温度；风扇由 macOS 自动控制"
+        let curveIsAboveThreshold =
+          snapshot.temperature > thresholdCelsius
+          || (isBatteryCurveEnabled
+            && (snapshot.batteryTemperature ?? -.infinity) > batteryCurveThreshold)
+        statusText =
+          curveIsAboveThreshold
+          ? "macOS 当前目标已不低于曲线；保持系统控制"
+          : "低于设定温度；风扇由 macOS 自动控制"
       case .manual(let targets):
         consecutiveCoolSamples = 0
         setSessionActive(true)
@@ -501,7 +525,7 @@ final class FanController: ObservableObject {
           interval: samplingInterval, bypass: cpuEmergency || batteryEmergency)
         try await service.apply(targets: limitedTargets, snapshot: snapshot)
         logger.notice(
-          "manual curve applied temperature=\(snapshot.temperature, privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
+          "manual curve applied temperature=\(snapshot.temperature, privacy: .public) reported=\(String(describing: snapshot.fans.map(\.reportedTargetRPM)), privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
         )
         targetRPMs = limitedTargets
         state = .manual
@@ -632,7 +656,11 @@ final class FanController: ObservableObject {
   private func setSessionActive(_ active: Bool) {
     // needsRecovery represents a session inherited from a previous process.
     // The current process tracks live ownership through FanService.manualFans.
-    if !active { needsRecovery = false }
+    if active, manualControlStartedAt == nil { manualControlStartedAt = Date() }
+    if !active {
+      needsRecovery = false
+      manualControlStartedAt = nil
+    }
     UserDefaults.standard.set(active, forKey: Self.activeSessionKey)
   }
 

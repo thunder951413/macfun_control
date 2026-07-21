@@ -30,6 +30,7 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
   func powerReading() -> PowerReading? { power }
   func fanActualRPM(fan index: Int) throws -> Double { actual[index] }
+  func fanTargetRPM(fan index: Int) throws -> Double { targets[index] }
   func fanMinimumRPM(fan index: Int) throws -> Double { minimum[index] }
   func fanMaximumRPM(fan index: Int) throws -> Double { maximum[index] }
   func fanMode(fan index: Int) throws -> UInt8 { modes[index] }
@@ -60,9 +61,38 @@ struct FanSafetyPolicyTests {
   func neverReducesExistingSpeed() throws {
     let fan = FanReading(index: 0, actualRPM: 5_000, minimumRPM: 1_800, maximumRPM: 6_500)
     let snapshot = FanSnapshot(temperature: 69, fans: [fan])
-    let decision = policy.decision(for: snapshot, threshold: 68, wasManual: false)
+    let decision = policy.decision(for: snapshot, threshold: 68, wasManual: true)
     let targets = try #require(manualTargets(decision))
     #expect(abs(targets[0] - 5_000) < 0.01)
+  }
+
+  @Test("a higher macOS target prevents FanBar from taking control")
+  func systemTargetPreventsTakeover() {
+    let fan = FanReading(
+      index: 0, actualRPM: 2_500, reportedTargetRPM: 3_200, minimumRPM: 1_350,
+      maximumRPM: 5_777)
+    let decision = policy.decision(
+      for: FanSnapshot(temperature: 52, fans: [fan]), threshold: 45, wasManual: false)
+    #expect(decision == .automatic)
+  }
+
+  @Test("a manual session never lowers its previous target")
+  func manualTargetIsMonotonic() throws {
+    let fan = FanReading(
+      index: 0, actualRPM: 2_700, reportedTargetRPM: 3_400, minimumRPM: 1_350,
+      maximumRPM: 5_777)
+    let decision = policy.decision(
+      for: FanSnapshot(temperature: 52, fans: [fan]), threshold: 45, wasManual: true)
+    #expect(try #require(manualTargets(decision)) == [3_400])
+  }
+
+  @Test("manual control periodically yields to macOS")
+  func manualControlAuditTiming() {
+    let start = Date(timeIntervalSince1970: 100)
+    #expect(ManualControlSafety.systemDemandAuditInterval == 10)
+    #expect(!ManualControlSafety.shouldAudit(startedAt: nil, now: start.addingTimeInterval(20)))
+    #expect(!ManualControlSafety.shouldAudit(startedAt: start, now: start.addingTimeInterval(9.9)))
+    #expect(ManualControlSafety.shouldAudit(startedAt: start, now: start.addingTimeInterval(10)))
   }
 
   @Test("90°C requests maximum fan speed")
@@ -100,10 +130,13 @@ struct FanSafetyPolicyTests {
       threshold: 120, wasManual: false)
     #expect(manualTargets(decision) != nil)
     #expect(FanSafetyPolicy.thresholdRange.lowerBound == 40)
+    let lowSpeedFan = FanReading(
+      index: 0, actualRPM: 1_000, minimumRPM: 1_000, maximumRPM: 6_500)
     #expect(
       manualTargets(
         policy.decision(
-          for: .init(temperature: 41, fans: [fan]), threshold: 20, wasManual: false)) != nil)
+          for: .init(temperature: 41, fans: [lowSpeedFan]), threshold: 20, wasManual: false))
+        != nil)
   }
 
   private func manualTargets(_ decision: FanSafetyPolicy.Decision) -> [Double]? {
@@ -151,6 +184,16 @@ struct FanSafetyPolicyTests {
       limiter.limit(
         desired: [6_000], previous: [2_000], fans: [fan], interval: 2, bypass: true)
         == [6_000])
+  }
+
+  @Test("slew limiting never clips below the reported macOS target")
+  func slewLimiterPreservesSystemTarget() {
+    let fan = FanReading(
+      index: 0, actualRPM: 2_500, reportedTargetRPM: 3_200, minimumRPM: 1_350,
+      maximumRPM: 5_777)
+    let limited = FanTargetSlewLimiter().limit(
+      desired: [4_500], previous: [], fans: [fan], interval: 2, bypass: false)
+    #expect(limited == [3_700])
   }
 
   @Test("curve preview maps threshold to zero and 90°C to maximum")

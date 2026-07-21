@@ -495,7 +495,7 @@ struct FanPopoverView: View {
         .accessibilityLabel("开始加速温度")
         Text(
           "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
-            + "普通升速每秒最多 250 rpm、降速最多 100 rpm；检测到 90°C 时立即请求满速。"
+            + "仅当曲线高于 macOS 目标时介入，手动会话内不下调，并每 10 秒交还系统复核；检测到 90°C 时立即请求满速。"
         )
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -53,17 +53,20 @@ actor FanService {
     var fans: [FanReading] = []
     for index in 0..<count {
       let actual = try hardware.fanActualRPM(fan: index)
+      let reportedTarget = try hardware.fanTargetRPM(fan: index)
       let minimum = try hardware.fanMinimumRPM(fan: index)
       let maximum = try hardware.fanMaximumRPM(fan: index)
       guard actual.isFinite, minimum.isFinite, maximum.isFinite,
         minimum >= 0, maximum > minimum, maximum <= 20_000,
-        actual >= 0, actual <= 20_000
+        actual >= 0, actual <= 20_000,
+        reportedTarget.isFinite, reportedTarget >= 0, reportedTarget <= 20_000
       else {
         throw FanServiceError.invalidFanRange(index)
       }
       fans.append(
         FanReading(
           index: index, actualRPM: actual,
+          reportedTargetRPM: reportedTarget,
           minimumRPM: minimum, maximumRPM: maximum))
     }
     return FanSnapshot(

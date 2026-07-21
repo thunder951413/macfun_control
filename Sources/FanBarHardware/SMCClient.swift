@@ -110,6 +110,7 @@ public protocol FanHardware: Sendable {
   func allTemperatureReadings() -> [TemperatureReading]
   func powerReading() -> PowerReading?
   func fanActualRPM(fan index: Int) throws -> Double
+  func fanTargetRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
   func fanMaximumRPM(fan index: Int) throws -> Double
   func fanMode(fan index: Int) throws -> UInt8
@@ -128,6 +129,10 @@ extension FanHardware {
   public func allTemperatureReadings() -> [TemperatureReading] { [] }
 
   public func powerReading() -> PowerReading? { nil }
+
+  public func fanTargetRPM(fan index: Int) throws -> Double {
+    try fanActualRPM(fan: index)
+  }
 
   public func cpuHotspotReading() throws -> TemperatureReading {
     TemperatureReading(key: "CPU hotspot", value: try cpuTemperature(source: .hotspot))
