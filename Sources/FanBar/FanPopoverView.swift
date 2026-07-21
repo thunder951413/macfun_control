@@ -270,6 +270,25 @@ struct FanPopoverView: View {
       }
       SectionDivider()
       SettingRow(
+        title: "采样周期", subtitle: controller.samplingIntervalOption.detail,
+        symbol: "clock.arrow.circlepath"
+      ) {
+        Picker(
+          "采样周期",
+          selection: Binding(
+            get: { controller.samplingIntervalOption },
+            set: { controller.setSamplingIntervalOption($0) }
+          )
+        ) {
+          ForEach(SamplingIntervalOption.allCases) { option in
+            Text(option.label).tag(option)
+          }
+        }
+        .labelsHidden()
+        .frame(width: 172)
+      }
+      SectionDivider()
+      SettingRow(
         title: "高温热点提醒", subtitle: "超过 90°C 时在菜单栏以红色提示",
         symbol: "thermometer.high"
       ) {
@@ -468,7 +487,7 @@ struct FanPopoverView: View {
         .accessibilityLabel("开始加速温度")
         Text(
           "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
-            + "普通升速每 2 秒最多 500 rpm、降速最多 200 rpm，达到 90°C 时立即满速。"
+            + "普通升速每秒最多 250 rpm、降速最多 100 rpm；检测到 90°C 时立即请求满速。"
         )
         .font(.caption)
         .foregroundStyle(.secondary)

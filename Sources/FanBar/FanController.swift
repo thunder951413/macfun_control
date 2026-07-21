@@ -56,6 +56,7 @@ final class FanController: ObservableObject {
   @Published private(set) var batteryCurveThreshold: Double
   @Published private(set) var fanAccelerationFactor: Double
   @Published private(set) var temperatureSource: CPUTemperatureSource
+  @Published private(set) var samplingIntervalOption: SamplingIntervalOption
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   @Published private(set) var fanCapability: FanCapability = .unknown
   @Published private var powerConnectionNoticeUntil: Date?
@@ -73,11 +74,12 @@ final class FanController: ObservableObject {
   private static let batteryCurveThresholdKey = "batteryCurveThreshold"
   private static let fanAccelerationFactorKey = "fanAccelerationFactor"
   private static let temperatureSourceKey = "temperatureSource"
+  private static let samplingIntervalKey = "samplingInterval"
   private let service: FanService
   private let policy: FanSafetyPolicy
   private let batteryPolicy: BatteryFanPolicy
   private let slewLimiter: FanTargetSlewLimiter
-  private let pollInterval: TimeInterval
+  private let pollIntervalOverride: TimeInterval?
   private var timer: Timer?
   private var isRefreshing = false
   private var hasStarted = false
@@ -96,7 +98,7 @@ final class FanController: ObservableObject {
     policy: FanSafetyPolicy = FanSafetyPolicy(),
     batteryPolicy: BatteryFanPolicy = BatteryFanPolicy(),
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
-    pollInterval: TimeInterval = 2,
+    pollInterval: TimeInterval? = nil,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
     launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
   ) {
@@ -104,7 +106,7 @@ final class FanController: ObservableObject {
     self.policy = policy
     self.batteryPolicy = batteryPolicy
     self.slewLimiter = slewLimiter
-    self.pollInterval = pollInterval
+    pollIntervalOverride = pollInterval
     self.helperManager = helperManager
     self.launchAtLoginManager = launchAtLoginManager
 
@@ -149,6 +151,13 @@ final class FanController: ObservableObject {
     temperatureSource =
       CPUTemperatureSource(
         rawValue: defaults.string(forKey: Self.temperatureSourceKey) ?? "") ?? .package
+    samplingIntervalOption =
+      SamplingIntervalOption(
+        rawValue: defaults.string(forKey: Self.samplingIntervalKey) ?? "") ?? .responsive
+  }
+
+  var samplingInterval: TimeInterval {
+    pollIntervalOverride ?? samplingIntervalOption.seconds
   }
 
   var temperatureText: String {
@@ -319,6 +328,24 @@ final class FanController: ObservableObject {
     Task { await refresh() }
   }
 
+  func setSamplingIntervalOption(_ option: SamplingIntervalOption) {
+    guard option != samplingIntervalOption else { return }
+    samplingIntervalOption = option
+    UserDefaults.standard.set(option.rawValue, forKey: Self.samplingIntervalKey)
+    dashboardRefreshCountdown = 0
+    guard pollIntervalOverride == nil else { return }
+    if timer != nil {
+      timer?.invalidate()
+      timer = nil
+      scheduleTimer()
+    }
+    if state == .monitoring, isFanless {
+      statusText = "此设备没有可控风扇；每 \(Int(samplingInterval)) 秒监控温度与提醒"
+    } else if state == .monitoring {
+      statusText = "每 \(Int(samplingInterval)) 秒更新一次"
+    }
+  }
+
   func start() {
     guard !hasStarted else { return }
     hasStarted = true
@@ -414,7 +441,7 @@ final class FanController: ObservableObject {
         }
         targetRPMs = []
         state = .monitoring
-        statusText = "每 \(Int(pollInterval)) 秒更新一次"
+        statusText = "每 \(Int(samplingInterval)) 秒更新一次"
         return
       }
 
@@ -461,7 +488,7 @@ final class FanController: ObservableObject {
         setSessionActive(true)
         let limitedTargets = slewLimiter.limit(
           desired: targets, previous: targetRPMs, fans: snapshot.fans,
-          interval: pollInterval, bypass: cpuEmergency || batteryEmergency)
+          interval: samplingInterval, bypass: cpuEmergency || batteryEmergency)
         try await service.apply(targets: limitedTargets, snapshot: snapshot)
         logger.notice(
           "manual curve applied temperature=\(snapshot.temperature, privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
@@ -557,7 +584,8 @@ final class FanController: ObservableObject {
 
   private func scheduleTimer() {
     guard timer == nil else { return }
-    timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+    timer = Timer.scheduledTimer(withTimeInterval: samplingInterval, repeats: true) {
+      [weak self] _ in
       Task { @MainActor [weak self] in await self?.refresh() }
     }
   }

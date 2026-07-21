@@ -212,6 +212,13 @@ struct FanSafetyPolicyTests {
 
 @Suite("Menu bar display preferences")
 struct MenuBarDisplayModeTests {
+  @Test("sampling choices remain bounded and describe their response tradeoff")
+  func samplingIntervalChoices() {
+    #expect(SamplingIntervalOption.allCases.map(\.seconds) == [2, 3, 5])
+    #expect(SamplingIntervalOption.responsive.label.contains("2 秒"))
+    #expect(SamplingIntervalOption.efficient.detail.contains("5 秒"))
+  }
+
   @Test("all display choices persist through their raw values")
   func rawValuesRoundTrip() {
     for mode in MenuBarDisplayMode.allCases {

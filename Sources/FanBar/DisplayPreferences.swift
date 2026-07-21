@@ -30,6 +30,38 @@ enum MenuBarPresentation {
   }
 }
 
+enum SamplingIntervalOption: String, CaseIterable, Identifiable {
+  case responsive
+  case balanced
+  case efficient
+
+  var id: String { rawValue }
+
+  var seconds: TimeInterval {
+    switch self {
+    case .responsive: 2
+    case .balanced: 3
+    case .efficient: 5
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .responsive: "2 秒 · 灵敏"
+    case .balanced: "3 秒 · 均衡"
+    case .efficient: "5 秒 · 节能"
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .responsive: "高温变化最快约 2 秒响应"
+    case .balanced: "减少约三分之一读取，响应仍及时"
+    case .efficient: "减少约六成读取，高温响应最迟约 5 秒"
+    }
+  }
+}
+
 enum PowerConnectionNotice {
   static let duration: TimeInterval = 2
 
