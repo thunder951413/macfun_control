@@ -177,6 +177,16 @@ final class FanController: ObservableObject {
     Self.powerText(currentPower?.systemPowerWatts)
   }
 
+  var batteryChargingPowerText: String {
+    guard currentPower?.isBatteryCharging == true else { return "未充电" }
+    return Self.powerText(currentPower?.batteryChargingPowerWatts)
+  }
+
+  var batteryChargingPowerSubtitle: String {
+    if currentPower?.isBatteryCharging == true { return "电池端实时净输入" }
+    return currentPower?.isExternalPowerConnected == true ? "当前未向电池充电" : "正在使用电池供电"
+  }
+
   var fanText: String {
     if fanCapability == .unavailable { return "无风扇" }
     guard !fanReadings.isEmpty else { return "-- rpm" }

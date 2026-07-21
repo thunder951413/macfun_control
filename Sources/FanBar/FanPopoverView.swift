@@ -181,7 +181,9 @@ struct FanPopoverView: View {
     VStack(alignment: .leading, spacing: 8) {
       Label("电源与功耗", systemImage: "bolt.fill")
         .font(.callout).fontWeight(.medium)
-      HStack(spacing: 8) {
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8
+      ) {
         PowerMetricCard(
           title: "电源输入能力",
           value: controller.inputCapacityText,
@@ -195,6 +197,12 @@ struct FanPopoverView: View {
           subtitle: "系统实时负载",
           symbol: "bolt.horizontal.fill",
           color: .orange)
+        PowerMetricCard(
+          title: "电池充电功率",
+          value: controller.batteryChargingPowerText,
+          subtitle: controller.batteryChargingPowerSubtitle,
+          symbol: "battery.100percent.bolt",
+          color: controller.currentPower?.isBatteryCharging == true ? .green : .secondary)
       }
     }
   }

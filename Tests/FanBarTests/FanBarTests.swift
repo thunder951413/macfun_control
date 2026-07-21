@@ -318,7 +318,8 @@ struct MenuBarDisplayModeTests {
     let hardware = MockFanHardware()
     hardware.count = 0
     hardware.power = PowerReading(
-      isExternalPowerConnected: false, inputCapacityWatts: nil, systemPowerWatts: 24.5)
+      isExternalPowerConnected: false, isBatteryCharging: false, inputCapacityWatts: nil,
+      systemPowerWatts: 24.5, batteryChargingPowerWatts: nil)
     let controller = FanController(
       service: FanService(hardware: hardware), pollInterval: 3_600)
 
@@ -327,7 +328,8 @@ struct MenuBarDisplayModeTests {
     #expect(controller.systemPowerText == "24.5 W")
 
     hardware.power = PowerReading(
-      isExternalPowerConnected: true, inputCapacityWatts: 67.8, systemPowerWatts: 31.2)
+      isExternalPowerConnected: true, isBatteryCharging: true, inputCapacityWatts: 67.8,
+      systemPowerWatts: 31.2, batteryChargingPowerWatts: 22.4)
     await controller.refresh()
 
     #expect(controller.menuBarPowerConnectionText == "67.8 W")
@@ -335,6 +337,7 @@ struct MenuBarDisplayModeTests {
     #expect(controller.menuBarSymbolName == "powerplug.fill")
     #expect(controller.menuBarHotspotAlertText == nil)
     #expect(controller.inputCapacityText == "67.8 W")
+    #expect(controller.batteryChargingPowerText == "22.4 W")
     _ = await controller.shutdown()
   }
 
@@ -359,16 +362,20 @@ struct CPUTemperatureSelectionTests {
     let connected = try #require(
       PowerTelemetryParser.parse(properties: [
         "ExternalConnected": true,
+        "IsCharging": true,
         "AdapterDetails": ["Watts": 96],
         "PowerDistribution": ["IPDWattageOverride": 140_000],
         "PowerTelemetryData": [
           "SystemPowerIn": 67_890,
           "SystemLoad": 31_250,
+          "BatteryPower": 34_125,
         ],
       ]))
     #expect(connected.isExternalPowerConnected)
     #expect(connected.inputCapacityWatts == 96)
     #expect(connected.systemPowerWatts == 31.25)
+    #expect(connected.isBatteryCharging)
+    #expect(connected.batteryChargingPowerWatts == 34.125)
 
     let negotiatedFallback = try #require(
       PowerTelemetryParser.parse(properties: [
@@ -378,9 +385,19 @@ struct CPUTemperatureSelectionTests {
       ]))
     #expect(negotiatedFallback.inputCapacityWatts == 140)
 
+    let chargingFallback = try #require(
+      PowerTelemetryParser.parse(properties: [
+        "ExternalConnected": true,
+        "IsCharging": true,
+        "Voltage": 12_000,
+        "Amperage": 2_500,
+      ]))
+    #expect(chargingFallback.batteryChargingPowerWatts == 30)
+
     let battery = try #require(
       PowerTelemetryParser.parse(properties: [
         "ExternalConnected": false,
+        "IsCharging": true,
         "PowerTelemetryData": [
           "SystemPowerIn": 99_000,
           "SystemLoad": 54_277,
@@ -389,6 +406,8 @@ struct CPUTemperatureSelectionTests {
     #expect(!battery.isExternalPowerConnected)
     #expect(battery.inputCapacityWatts == nil)
     #expect(battery.systemPowerWatts == 54.277)
+    #expect(!battery.isBatteryCharging)
+    #expect(battery.batteryChargingPowerWatts == nil)
   }
 
   @Test("robust average trims extreme sensor outliers")
@@ -424,7 +443,8 @@ struct FanServiceTests {
     hardware.count = 0
     hardware.sensorReadings = [TemperatureReading(key: "TB0T", value: 34)]
     hardware.power = PowerReading(
-      isExternalPowerConnected: false, inputCapacityWatts: nil, systemPowerWatts: 22)
+      isExternalPowerConnected: false, isBatteryCharging: false, inputCapacityWatts: nil,
+      systemPowerWatts: 22, batteryChargingPowerWatts: nil)
     let service = FanService(hardware: hardware)
     let snapshot = try await service.prepare()
     #expect(snapshot.fans.isEmpty)

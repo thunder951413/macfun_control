@@ -22,15 +22,20 @@ public struct TemperatureReading: Sendable, Equatable, Identifiable {
 
 public struct PowerReading: Sendable, Equatable {
   public let isExternalPowerConnected: Bool
+  public let isBatteryCharging: Bool
   public let inputCapacityWatts: Double?
   public let systemPowerWatts: Double?
+  public let batteryChargingPowerWatts: Double?
 
   public init(
-    isExternalPowerConnected: Bool, inputCapacityWatts: Double?, systemPowerWatts: Double?
+    isExternalPowerConnected: Bool, isBatteryCharging: Bool, inputCapacityWatts: Double?,
+    systemPowerWatts: Double?, batteryChargingPowerWatts: Double?
   ) {
     self.isExternalPowerConnected = isExternalPowerConnected
+    self.isBatteryCharging = isBatteryCharging
     self.inputCapacityWatts = inputCapacityWatts
     self.systemPowerWatts = systemPowerWatts
+    self.batteryChargingPowerWatts = batteryChargingPowerWatts
   }
 }
 
@@ -40,16 +45,26 @@ public enum PowerTelemetryParser {
     let telemetry = properties["PowerTelemetryData"] as? [String: Any]
     let adapter = properties["AdapterDetails"] as? [String: Any]
     let distribution = properties["PowerDistribution"] as? [String: Any]
+    let isCharging = connected && bool(properties["IsCharging"]) == true
     let inputCapacity =
       connected
       ? watts(number(adapter?["Watts"]))
         ?? watts(fromMilliwatts: number(distribution?["IPDWattageOverride"]))
       : nil
     let system = watts(fromMilliwatts: number(telemetry?["SystemLoad"]))
+    let batteryChargingPower =
+      isCharging
+      ? watts(fromMilliwatts: number(telemetry?["BatteryPower"]))
+        ?? watts(
+          voltageMillivolts: number(properties["Voltage"]),
+          currentMilliamps: number(properties["Amperage"]))
+      : nil
     return PowerReading(
       isExternalPowerConnected: connected,
+      isBatteryCharging: isCharging,
       inputCapacityWatts: inputCapacity,
-      systemPowerWatts: system)
+      systemPowerWatts: system,
+      batteryChargingPowerWatts: batteryChargingPower)
   }
 
   private static func bool(_ value: Any?) -> Bool? {
@@ -70,6 +85,16 @@ public enum PowerTelemetryParser {
   private static func watts(_ value: Double?) -> Double? {
     guard let value, value.isFinite, (0...500).contains(value) else { return nil }
     return value
+  }
+
+  private static func watts(
+    voltageMillivolts: Double?, currentMilliamps: Double?
+  ) -> Double? {
+    guard let voltageMillivolts, let currentMilliamps,
+      voltageMillivolts.isFinite, currentMilliamps.isFinite,
+      (0...30_000).contains(voltageMillivolts), (0...20_000).contains(currentMilliamps)
+    else { return nil }
+    return voltageMillivolts * currentMilliamps / 1_000_000
   }
 }
 
@@ -360,7 +385,10 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
         service, "ExternalConnected" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
     else { return nil }
     var values: [String: Any] = ["ExternalConnected": connected]
-    for key in ["AdapterDetails", "PowerDistribution", "PowerTelemetryData"] {
+    for key in [
+      "IsCharging", "Voltage", "Amperage", "AdapterDetails", "PowerDistribution",
+      "PowerTelemetryData",
+    ] {
       if let value = IORegistryEntryCreateCFProperty(
         service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
       {

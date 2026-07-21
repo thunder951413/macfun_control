@@ -250,8 +250,10 @@ struct FanBarMain {
         let input =
           power.inputCapacityWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
         let system = power.systemPowerWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        let charging =
+          power.batteryChargingPowerWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
         print(
-          "power.external=\(power.isExternalPowerConnected) input=\(input)W system=\(system)W"
+          "power.external=\(power.isExternalPowerConnected) charging=\(power.isBatteryCharging) input=\(input)W system=\(system)W battery=\(charging)W"
         )
       }
       for fan in 0..<count {
