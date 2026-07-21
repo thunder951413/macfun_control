@@ -98,7 +98,7 @@ final class FanController: ObservableObject {
     policy: FanSafetyPolicy = FanSafetyPolicy(),
     batteryPolicy: BatteryFanPolicy = BatteryFanPolicy(),
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
-    pollInterval: TimeInterval? = nil,
+    pollInterval: TimeInterval = 0,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
     launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
   ) {
@@ -106,7 +106,7 @@ final class FanController: ObservableObject {
     self.policy = policy
     self.batteryPolicy = batteryPolicy
     self.slewLimiter = slewLimiter
-    pollIntervalOverride = pollInterval
+    pollIntervalOverride = pollInterval > 0 ? pollInterval : nil
     self.helperManager = helperManager
     self.launchAtLoginManager = launchAtLoginManager
 
