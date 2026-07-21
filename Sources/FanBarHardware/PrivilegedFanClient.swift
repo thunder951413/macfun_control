@@ -140,6 +140,7 @@ public final class RoutedFanHardware: FanHardware, @unchecked Sendable {
   public func allTemperatureReadings() -> [TemperatureReading] {
     local.allTemperatureReadings()
   }
+  public func powerReading() -> PowerReading? { local.powerReading() }
   public func fanActualRPM(fan index: Int) throws -> Double { try local.fanActualRPM(fan: index) }
   public func fanMinimumRPM(fan index: Int) throws -> Double { try local.fanMinimumRPM(fan: index) }
   public func fanMaximumRPM(fan index: Int) throws -> Double { try local.fanMaximumRPM(fan: index) }

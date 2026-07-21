@@ -30,6 +30,24 @@ enum MenuBarPresentation {
   }
 }
 
+enum PowerConnectionNotice {
+  static let duration: TimeInterval = 2
+
+  static func didConnect(previous: Bool?, current: Bool) -> Bool {
+    previous == false && current
+  }
+
+  static func isVisible(until: Date?, now: Date = Date()) -> Bool {
+    guard let until else { return false }
+    return now < until
+  }
+
+  static func text(for power: PowerReading) -> String {
+    guard let watts = power.inputCapacityWatts else { return "-- W" }
+    return String(format: "%.1f W", watts)
+  }
+}
+
 enum PopoverTab: String, Hashable {
   case sensors
   case settings
@@ -42,9 +60,9 @@ enum PopoverTab: String, Hashable {
       // cards, section headings, padding, and the two-column sensor rows.
       // The previous base omitted most of that fixed content and clipped the
       // last rows even though the row-count calculation itself was correct.
-      let baseHeight = hasControllableFans ? 356.0 : 348.0
-      let minimumHeight = hasControllableFans ? 510.0 : 500.0
-      return min(700, max(minimumHeight, baseHeight + Double(rows) * 68))
+      let baseHeight = hasControllableFans ? 450.0 : 442.0
+      let minimumHeight = hasControllableFans ? 600.0 : 590.0
+      return min(780, max(minimumHeight, baseHeight + Double(rows) * 68))
     case .settings:
       return hasControllableFans ? 620 : 500
     }

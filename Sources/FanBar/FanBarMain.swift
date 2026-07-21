@@ -246,6 +246,14 @@ struct FanBarMain {
       defer { smc.close() }
       let count = try smc.fanCount()
       print("temperature=\(try smc.cpuTemperature()) fans=\(count)")
+      if let power = smc.powerReading() {
+        let input =
+          power.inputCapacityWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        let system = power.systemPowerWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        print(
+          "power.external=\(power.isExternalPowerConnected) input=\(input)W system=\(system)W"
+        )
+      }
       for fan in 0..<count {
         print(
           "fan=\(fan) mode=\(try smc.fanMode(fan: fan)) actual=\(try smc.fanActualRPM(fan: fan)) target=\(try smc.fanTargetRPM(fan: fan)) min=\(try smc.fanMinimumRPM(fan: fan)) max=\(try smc.fanMaximumRPM(fan: fan))"

@@ -20,6 +20,59 @@ public struct TemperatureReading: Sendable, Equatable, Identifiable {
   }
 }
 
+public struct PowerReading: Sendable, Equatable {
+  public let isExternalPowerConnected: Bool
+  public let inputCapacityWatts: Double?
+  public let systemPowerWatts: Double?
+
+  public init(
+    isExternalPowerConnected: Bool, inputCapacityWatts: Double?, systemPowerWatts: Double?
+  ) {
+    self.isExternalPowerConnected = isExternalPowerConnected
+    self.inputCapacityWatts = inputCapacityWatts
+    self.systemPowerWatts = systemPowerWatts
+  }
+}
+
+public enum PowerTelemetryParser {
+  public static func parse(properties: [String: Any]) -> PowerReading? {
+    guard let connected = bool(properties["ExternalConnected"]) else { return nil }
+    let telemetry = properties["PowerTelemetryData"] as? [String: Any]
+    let adapter = properties["AdapterDetails"] as? [String: Any]
+    let distribution = properties["PowerDistribution"] as? [String: Any]
+    let inputCapacity =
+      connected
+      ? watts(number(adapter?["Watts"]))
+        ?? watts(fromMilliwatts: number(distribution?["IPDWattageOverride"]))
+      : nil
+    let system = watts(fromMilliwatts: number(telemetry?["SystemLoad"]))
+    return PowerReading(
+      isExternalPowerConnected: connected,
+      inputCapacityWatts: inputCapacity,
+      systemPowerWatts: system)
+  }
+
+  private static func bool(_ value: Any?) -> Bool? {
+    if let value = value as? Bool { return value }
+    if let value = value as? NSNumber { return value.boolValue }
+    return nil
+  }
+
+  private static func number(_ value: Any?) -> Double? {
+    (value as? NSNumber)?.doubleValue
+  }
+
+  private static func watts(fromMilliwatts value: Double?) -> Double? {
+    guard let value, value.isFinite, (0...500_000).contains(value) else { return nil }
+    return value / 1_000
+  }
+
+  private static func watts(_ value: Double?) -> Double? {
+    guard let value, value.isFinite, (0...500).contains(value) else { return nil }
+    return value
+  }
+}
+
 public protocol FanHardware: Sendable {
   var isOpen: Bool { get }
   func open() throws
@@ -30,6 +83,7 @@ public protocol FanHardware: Sendable {
   func cpuHotspotReading() throws -> TemperatureReading
   func batteryTemperatureReading() throws -> TemperatureReading
   func allTemperatureReadings() -> [TemperatureReading]
+  func powerReading() -> PowerReading?
   func fanActualRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
   func fanMaximumRPM(fan index: Int) throws -> Double
@@ -47,6 +101,8 @@ extension FanHardware {
   }
 
   public func allTemperatureReadings() -> [TemperatureReading] { [] }
+
+  public func powerReading() -> PowerReading? { nil }
 
   public func cpuHotspotReading() throws -> TemperatureReading {
     TemperatureReading(key: "CPU hotspot", value: try cpuTemperature(source: .hotspot))
@@ -291,6 +347,27 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       else { return nil }
       return TemperatureReading(key: key, value: value)
     }
+  }
+
+  public func powerReading() -> PowerReading? {
+    let service = IOServiceGetMatchingService(
+      kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+    guard service != 0 else { return nil }
+    defer { IOObjectRelease(service) }
+
+    guard
+      let connected = IORegistryEntryCreateCFProperty(
+        service, "ExternalConnected" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+    else { return nil }
+    var values: [String: Any] = ["ExternalConnected": connected]
+    for key in ["AdapterDetails", "PowerDistribution", "PowerTelemetryData"] {
+      if let value = IORegistryEntryCreateCFProperty(
+        service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+      {
+        values[key] = value
+      }
+    }
+    return PowerTelemetryParser.parse(properties: values)
   }
 
   private func firstValidTemperature(_ keys: [String]) -> Double? {

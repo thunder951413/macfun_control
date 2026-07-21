@@ -1,3 +1,4 @@
+import FanBarHardware
 import Foundation
 
 enum FanAccelerationProfile {
@@ -30,17 +31,20 @@ struct FanSnapshot: Sendable, Equatable {
   let hotspotSource: String?
   let batteryTemperature: Double?
   let batterySource: String?
+  let power: PowerReading?
   let fans: [FanReading]
 
   init(
     temperature: Double, hotspotTemperature: Double? = nil, hotspotSource: String? = nil,
-    batteryTemperature: Double? = nil, batterySource: String? = nil, fans: [FanReading]
+    batteryTemperature: Double? = nil, batterySource: String? = nil, power: PowerReading? = nil,
+    fans: [FanReading]
   ) {
     self.temperature = temperature
     self.hotspotTemperature = hotspotTemperature
     self.hotspotSource = hotspotSource
     self.batteryTemperature = batteryTemperature
     self.batterySource = batterySource
+    self.power = power
     self.fans = fans
   }
 }

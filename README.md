@@ -10,6 +10,8 @@ Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0
 
 The shared 0.5×–2.0× acceleration factor smoothly reshapes both curves without changing their start or maximum-temperature endpoints. Physical RPM changes still pass through the asymmetric slew limiter, so changing the factor cannot make normal control jump directly to a new target.
 
+The Sensor tab reads Apple's power data in the existing two-second sample cycle. It shows the connected adapter's current negotiated input capacity and the live system load as separate values. A newly connected power source temporarily replaces the normal menu bar content with a plug icon and the negotiated watts for two seconds.
+
 Fan capability is detected from AppleSMC rather than a model-name list. When `FNum` reports zero controllable fans, FanBar enters temperature-only monitoring mode: it uses a thermometer menu bar icon, removes fan-speed display modes and every fan-control curve, skips privileged-helper registration, and keeps sensor monitoring plus CPU and battery alerts available.
 
 ## Safety behavior

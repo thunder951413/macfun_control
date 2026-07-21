@@ -1,4 +1,5 @@
 import FanBarHardware
+import Foundation
 import Testing
 
 @testable import FanBar
@@ -19,6 +20,7 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   var overrideActive = false
   var sensorReadings: [TemperatureReading] = []
   var hotspotReading = TemperatureReading(key: "TCMz", value: 70)
+  var power: PowerReading?
 
   func open() throws { isOpen = true }
   func close() { isOpen = false }
@@ -26,6 +28,7 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   func cpuTemperature() throws -> Double { temperature }
   func cpuHotspotReading() throws -> TemperatureReading { hotspotReading }
   func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
+  func powerReading() -> PowerReading? { power }
   func fanActualRPM(fan index: Int) throws -> Double { actual[index] }
   func fanMinimumRPM(fan index: Int) throws -> Double { minimum[index] }
   func fanMaximumRPM(fan index: Int) throws -> Double { maximum[index] }
@@ -256,15 +259,15 @@ struct MenuBarDisplayModeTests {
 
   @Test("popover height adapts to tab and sensor rows")
   func popoverHeightAdapts() {
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 510)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 600)
     #expect(
       PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 7) == 628)
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 700)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 7) == 722)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 780)
     #expect(
       PopoverTab.sensors.preferredHeight(
-        sensorGroupCount: 2, hasControllableFans: false) == 500)
+        sensorGroupCount: 2, hasControllableFans: false) == 590)
     #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 620)
     #expect(
       PopoverTab.settings.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 500)
@@ -301,10 +304,86 @@ struct MenuBarDisplayModeTests {
       BatteryMenuAlert.text(temperature: 40.6, threshold: 40)
         == "🔋 电池区域 41°")
   }
+
+  @Test("power connection notice replaces menu bar content only on a new connection")
+  @MainActor
+  func powerConnectionNoticeTransition() async {
+    let hardware = MockFanHardware()
+    hardware.count = 0
+    hardware.power = PowerReading(
+      isExternalPowerConnected: false, inputCapacityWatts: nil, systemPowerWatts: 24.5)
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600)
+
+    await controller.refresh()
+    #expect(controller.menuBarPowerConnectionText == nil)
+    #expect(controller.systemPowerText == "24.5 W")
+
+    hardware.power = PowerReading(
+      isExternalPowerConnected: true, inputCapacityWatts: 67.8, systemPowerWatts: 31.2)
+    await controller.refresh()
+
+    #expect(controller.menuBarPowerConnectionText == "67.8 W")
+    #expect(controller.menuBarText == "67.8 W")
+    #expect(controller.menuBarSymbolName == "powerplug.fill")
+    #expect(controller.menuBarHotspotAlertText == nil)
+    #expect(controller.inputCapacityText == "67.8 W")
+    _ = await controller.shutdown()
+  }
+
+  @Test("power connection notice lasts two seconds without alerting at initial launch")
+  func powerConnectionNoticeTiming() {
+    let start = Date(timeIntervalSince1970: 100)
+    #expect(PowerConnectionNotice.duration == 2)
+    #expect(!PowerConnectionNotice.didConnect(previous: nil, current: true))
+    #expect(PowerConnectionNotice.didConnect(previous: false, current: true))
+    #expect(!PowerConnectionNotice.didConnect(previous: true, current: true))
+    #expect(PowerConnectionNotice.isVisible(until: start.addingTimeInterval(2), now: start))
+    #expect(
+      !PowerConnectionNotice.isVisible(
+        until: start.addingTimeInterval(2), now: start.addingTimeInterval(2)))
+  }
 }
 
 @Suite("CPU temperature selection")
 struct CPUTemperatureSelectionTests {
+  @Test("power telemetry converts live milliwatts and suppresses input on battery")
+  func powerTelemetryParsing() throws {
+    let connected = try #require(
+      PowerTelemetryParser.parse(properties: [
+        "ExternalConnected": true,
+        "AdapterDetails": ["Watts": 96],
+        "PowerDistribution": ["IPDWattageOverride": 140_000],
+        "PowerTelemetryData": [
+          "SystemPowerIn": 67_890,
+          "SystemLoad": 31_250,
+        ],
+      ]))
+    #expect(connected.isExternalPowerConnected)
+    #expect(connected.inputCapacityWatts == 96)
+    #expect(connected.systemPowerWatts == 31.25)
+
+    let negotiatedFallback = try #require(
+      PowerTelemetryParser.parse(properties: [
+        "ExternalConnected": true,
+        "PowerDistribution": ["IPDWattageOverride": 140_000],
+        "PowerTelemetryData": ["SystemLoad": 40_000],
+      ]))
+    #expect(negotiatedFallback.inputCapacityWatts == 140)
+
+    let battery = try #require(
+      PowerTelemetryParser.parse(properties: [
+        "ExternalConnected": false,
+        "PowerTelemetryData": [
+          "SystemPowerIn": 99_000,
+          "SystemLoad": 54_277,
+        ],
+      ]))
+    #expect(!battery.isExternalPowerConnected)
+    #expect(battery.inputCapacityWatts == nil)
+    #expect(battery.systemPowerWatts == 54.277)
+  }
+
   @Test("robust average trims extreme sensor outliers")
   func robustAverageTrimsOutliers() throws {
     let values = [0.0] + Array(repeating: 50.0, count: 8) + [100.0]
@@ -337,11 +416,14 @@ struct FanServiceTests {
     let hardware = MockFanHardware()
     hardware.count = 0
     hardware.sensorReadings = [TemperatureReading(key: "TB0T", value: 34)]
+    hardware.power = PowerReading(
+      isExternalPowerConnected: false, inputCapacityWatts: nil, systemPowerWatts: 22)
     let service = FanService(hardware: hardware)
     let snapshot = try await service.prepare()
     #expect(snapshot.fans.isEmpty)
     #expect(snapshot.temperature == hardware.temperature)
     #expect(snapshot.batteryTemperature == 34)
+    #expect(snapshot.power?.systemPowerWatts == 22)
 
     try await service.restoreAutomatic()
     #expect(hardware.automaticWriteCount == 0)

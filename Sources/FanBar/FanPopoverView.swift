@@ -57,6 +57,7 @@ struct FanPopoverView: View {
         } else {
           metrics
         }
+        powerMetrics
         temperatureOverview
         sensorTemperatures
       }
@@ -172,6 +173,28 @@ struct FanPopoverView: View {
         TemperatureMetricCard(
           title: "最高热点", value: dashboardValue(.hotspot),
           isControlSource: controller.temperatureSource == .hotspot)
+      }
+    }
+  }
+
+  private var powerMetrics: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label("电源与功耗", systemImage: "bolt.fill")
+        .font(.callout).fontWeight(.medium)
+      HStack(spacing: 8) {
+        PowerMetricCard(
+          title: "电源输入能力",
+          value: controller.inputCapacityText,
+          subtitle: controller.currentPower?.isExternalPowerConnected == true
+            ? "当前充电器协商功率" : "当前未接入外部电源",
+          symbol: "powerplug.fill",
+          color: controller.currentPower?.isExternalPowerConnected == true ? .green : .secondary)
+        PowerMetricCard(
+          title: "设备当前功耗",
+          value: controller.systemPowerText,
+          subtitle: "系统实时负载",
+          symbol: "bolt.horizontal.fill",
+          color: .orange)
       }
     }
   }
@@ -524,6 +547,35 @@ private struct TemperatureMetricCard: View {
       RoundedRectangle(cornerRadius: 8)
         .stroke(isControlSource ? Color.orange.opacity(0.8) : .clear, lineWidth: 1)
     }
+  }
+}
+
+private struct PowerMetricCard: View {
+  let title: String
+  let value: String
+  let subtitle: String
+  let symbol: String
+  let color: Color
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: symbol)
+        .font(.title3)
+        .foregroundStyle(color)
+        .frame(width: 30, height: 30)
+        .background(color.opacity(0.1), in: Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text(title).font(.caption).foregroundStyle(.secondary)
+        Text(value)
+          .font(.system(.title3, design: .rounded).monospacedDigit())
+          .fontWeight(.semibold)
+        Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 2)
+    }
+    .padding(10)
+    .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+    .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
   }
 }
 

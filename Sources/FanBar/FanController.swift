@@ -42,6 +42,7 @@ final class FanController: ObservableObject {
   @Published private(set) var currentHotspotSource: String?
   @Published private(set) var currentBatteryTemperature: Double?
   @Published private(set) var currentBatterySource: String?
+  @Published private(set) var currentPower: PowerReading?
   @Published private(set) var temperatureDashboard = TemperatureDashboard.empty
   @Published private(set) var fanReadings: [FanReading] = []
   @Published private(set) var targetRPMs: [Double] = []
@@ -57,6 +58,7 @@ final class FanController: ObservableObject {
   @Published private(set) var temperatureSource: CPUTemperatureSource
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   @Published private(set) var fanCapability: FanCapability = .unknown
+  @Published private var powerConnectionNoticeUntil: Date?
   let helperManager: PrivilegedHelperManager
   let launchAtLoginManager: LaunchAtLoginManager
 
@@ -86,6 +88,8 @@ final class FanController: ObservableObject {
   private var batteryTemperatureFilter = TemperatureSafetyFilter(capacity: 3)
   private var dashboardRefreshCountdown = 0
   private var didConfigureHelperForCapability = false
+  private var previousExternalPowerConnected: Bool?
+  private var powerConnectionNoticeTask: Task<Void, Never>?
 
   init(
     service: FanService = FanService(),
@@ -155,6 +159,15 @@ final class FanController: ObservableObject {
     currentBatteryTemperature.map { "\(Int($0.rounded()))°C" } ?? "--°C"
   }
 
+  var inputCapacityText: String {
+    guard currentPower?.isExternalPowerConnected == true else { return "-- W" }
+    return Self.powerText(currentPower?.inputCapacityWatts)
+  }
+
+  var systemPowerText: String {
+    Self.powerText(currentPower?.systemPowerWatts)
+  }
+
   var fanText: String {
     if fanCapability == .unavailable { return "无风扇" }
     guard !fanReadings.isEmpty else { return "-- rpm" }
@@ -169,6 +182,7 @@ final class FanController: ObservableObject {
   }
 
   var menuBarText: String {
+    if let notice = menuBarPowerConnectionText { return notice }
     let temperature = currentTemperature.map { "\(Int($0.rounded()))°" } ?? "--°"
     let averageRPM =
       fanReadings.isEmpty
@@ -196,24 +210,35 @@ final class FanController: ObservableObject {
   }
 
   var menuBarSymbolName: String {
-    MenuBarPresentation.symbolName(state: state, hasControllableFans: !isFanless)
+    if menuBarPowerConnectionText != nil { return "powerplug.fill" }
+    return MenuBarPresentation.symbolName(state: state, hasControllableFans: !isFanless)
   }
 
   var menuBarAccessibilityDescription: String {
+    if let notice = menuBarPowerConnectionText { return "FanBar 已接入电源 \(notice)" }
     if isFanless { return "FanBar 温度监控" }
     return state == .manual ? "FanBar 正在加速风扇" : "FanBar 系统自动风扇"
   }
 
   var menuBarHotspotAlertText: String? {
+    guard menuBarPowerConnectionText == nil else { return nil }
     guard showsHotspotMenuAlert else { return nil }
     return HotspotMenuAlert.text(
       temperature: currentHotspotTemperature, source: currentHotspotSource)
   }
 
   var menuBarBatteryAlertText: String? {
+    guard menuBarPowerConnectionText == nil else { return nil }
     guard showsBatteryMenuAlert else { return nil }
     return BatteryMenuAlert.text(
       temperature: currentBatteryTemperature, threshold: batteryAlertThreshold)
+  }
+
+  var menuBarPowerConnectionText: String? {
+    guard PowerConnectionNotice.isVisible(until: powerConnectionNoticeUntil),
+      let currentPower, currentPower.isExternalPowerConnected
+    else { return nil }
+    return PowerConnectionNotice.text(for: currentPower)
   }
 
   var curvePercent: Int? {
@@ -350,12 +375,14 @@ final class FanController: ObservableObject {
         temperature: filteredTemperature, hotspotTemperature: rawSnapshot.hotspotTemperature,
         hotspotSource: rawSnapshot.hotspotSource,
         batteryTemperature: filteredBatteryTemperature, batterySource: rawSnapshot.batterySource,
-        fans: rawSnapshot.fans)
+        power: rawSnapshot.power, fans: rawSnapshot.fans)
       currentTemperature = filteredTemperature
       currentHotspotTemperature = rawSnapshot.hotspotTemperature
       currentHotspotSource = rawSnapshot.hotspotSource
       currentBatteryTemperature = filteredBatteryTemperature
       currentBatterySource = rawSnapshot.batterySource
+      currentPower = rawSnapshot.power
+      updatePowerConnectionNotice(rawSnapshot.power)
       fanReadings = rawSnapshot.fans
       updateFanCapability(hasControllableFans: !rawSnapshot.fans.isEmpty)
       if dashboardRefreshCountdown <= 0 {
@@ -511,6 +538,9 @@ final class FanController: ObservableObject {
     batteryTemperatureFilter.reset()
     timer?.invalidate()
     timer = nil
+    powerConnectionNoticeTask?.cancel()
+    powerConnectionNoticeTask = nil
+    powerConnectionNoticeUntil = nil
     state = .suspended
     statusText = "正在退出并交还 macOS 风扇控制…"
     if let error = await attemptSafetyRestore() {
@@ -612,5 +642,31 @@ final class FanController: ObservableObject {
           MenuBarDisplayMode.temperature.rawValue, forKey: Self.menuBarDisplayKey)
       }
     }
+  }
+
+  private func updatePowerConnectionNotice(_ power: PowerReading?) {
+    guard let connected = power?.isExternalPowerConnected else { return }
+    if PowerConnectionNotice.didConnect(
+      previous: previousExternalPowerConnected, current: connected)
+    {
+      powerConnectionNoticeTask?.cancel()
+      powerConnectionNoticeUntil = Date().addingTimeInterval(PowerConnectionNotice.duration)
+      powerConnectionNoticeTask = Task { [weak self] in
+        try? await Task.sleep(for: .seconds(PowerConnectionNotice.duration))
+        guard !Task.isCancelled else { return }
+        self?.powerConnectionNoticeUntil = nil
+        self?.powerConnectionNoticeTask = nil
+      }
+    } else if !connected {
+      powerConnectionNoticeTask?.cancel()
+      powerConnectionNoticeTask = nil
+      powerConnectionNoticeUntil = nil
+    }
+    previousExternalPowerConnected = connected
+  }
+
+  private static func powerText(_ value: Double?) -> String {
+    guard let value else { return "-- W" }
+    return String(format: "%.1f W", value)
   }
 }
