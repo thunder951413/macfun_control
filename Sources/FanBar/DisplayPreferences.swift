@@ -6,6 +6,9 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
   case temperature
   case fanSpeed
   case temperatureAndFan
+  case battery
+  case temperatureAndBattery
+  case temperatureFanAndBattery
 
   var id: String { rawValue }
 
@@ -15,11 +18,20 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
     case .temperature: "温度"
     case .fanSpeed: "风扇转速"
     case .temperatureAndFan: "温度＋转速"
+    case .battery: "电量与充电状态"
+    case .temperatureAndBattery: "温度＋电量"
+    case .temperatureFanAndBattery: "温度＋转速＋电量"
     }
   }
 
   static func available(hasControllableFans: Bool) -> [MenuBarDisplayMode] {
-    hasControllableFans ? allCases : [.iconOnly, .temperature]
+    hasControllableFans
+      ? allCases
+      : [.iconOnly, .temperature, .battery, .temperatureAndBattery]
+  }
+
+  var includesBattery: Bool {
+    self == .battery || self == .temperatureAndBattery || self == .temperatureFanAndBattery
   }
 }
 
@@ -80,6 +92,23 @@ enum PowerConnectionNotice {
   }
 }
 
+enum BatteryStatusPresentation {
+  static func text(for power: PowerReading?) -> String {
+    guard let level = power?.batteryLevelPercent else { return "--%" }
+    if power?.isBatteryCharging == true { return "\(level)% ⚡︎" }
+    if power?.isBatteryFullyCharged == true { return "\(level)% ✓" }
+    if power?.isExternalPowerConnected == true { return "\(level)% ⏸" }
+    return "\(level)%"
+  }
+
+  static func symbolName(for power: PowerReading?) -> String {
+    guard let level = power?.batteryLevelPercent else { return "battery.0percent" }
+    let bucket = min(100, max(0, Int((Double(level) / 25).rounded()) * 25))
+    let base = "battery.\(bucket)percent"
+    return power?.isBatteryCharging == true ? "battery.100percent.bolt" : base
+  }
+}
+
 enum PopoverTab: String, Hashable {
   case sensors
   case settings
@@ -92,11 +121,11 @@ enum PopoverTab: String, Hashable {
       // cards, section headings, padding, and the two-column sensor rows.
       // The previous base omitted most of that fixed content and clipped the
       // last rows even though the row-count calculation itself was correct.
-      let baseHeight = hasControllableFans ? 450.0 : 442.0
-      let minimumHeight = hasControllableFans ? 600.0 : 590.0
+      let baseHeight = hasControllableFans ? 518.0 : 510.0
+      let minimumHeight = hasControllableFans ? 668.0 : 658.0
       return min(780, max(minimumHeight, baseHeight + Double(rows) * 68))
     case .settings:
-      return hasControllableFans ? 620 : 500
+      return hasControllableFans ? 700 : 590
     }
   }
 }

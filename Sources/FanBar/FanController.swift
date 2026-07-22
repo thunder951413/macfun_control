@@ -43,6 +43,10 @@ final class FanController: ObservableObject {
   @Published private(set) var currentBatteryTemperature: Double?
   @Published private(set) var currentBatterySource: String?
   @Published private(set) var currentPower: PowerReading?
+  @Published private(set) var batteryChargeLimitState = BatteryChargeLimitState.unsupported
+  @Published private(set) var batteryChargeLimitEnabled: Bool
+  @Published private(set) var batteryChargeLimitPercent: Int
+  @Published private(set) var batteryChargeLimitError: String?
   @Published private(set) var temperatureDashboard = TemperatureDashboard.empty
   @Published private(set) var fanReadings: [FanReading] = []
   @Published private(set) var targetRPMs: [Double] = []
@@ -79,6 +83,8 @@ final class FanController: ObservableObject {
   private static let fanAccelerationFactorKey = "fanAccelerationFactor"
   private static let temperatureSourceKey = "temperatureSource"
   private static let samplingIntervalKey = "samplingInterval"
+  private static let batteryChargeLimitEnabledKey = "batteryChargeLimitEnabled"
+  private static let batteryChargeLimitPercentKey = "batteryChargeLimitPercent"
   private let service: FanService
   private let policy: FanSafetyPolicy
   private let batteryPolicy: BatteryFanPolicy
@@ -168,6 +174,10 @@ final class FanController: ObservableObject {
     samplingIntervalOption =
       SamplingIntervalOption(
         rawValue: defaults.string(forKey: Self.samplingIntervalKey) ?? "") ?? .responsive
+    batteryChargeLimitEnabled =
+      defaults.object(forKey: Self.batteryChargeLimitEnabledKey) as? Bool ?? false
+    batteryChargeLimitPercent = min(
+      100, max(80, defaults.object(forKey: Self.batteryChargeLimitPercentKey) as? Int ?? 80))
   }
 
   var samplingInterval: TimeInterval {
@@ -216,6 +226,27 @@ final class FanController: ObservableObject {
     return currentPower?.isExternalPowerConnected == true ? "当前未向电池充电" : "正在使用电池供电"
   }
 
+  var batteryLevelText: String { BatteryStatusPresentation.text(for: currentPower) }
+
+  var batteryStatusText: String {
+    guard let power = currentPower else { return "正在读取电池状态" }
+    if power.isBatteryCharging { return "正在充电" }
+    if power.isBatteryFullyCharged { return "已充满" }
+    if power.isExternalPowerConnected { return "已接电源 · 暂停充电" }
+    return "正在使用电池"
+  }
+
+  var batteryChargeLimitSubtitle: String {
+    if let batteryChargeLimitError { return "设置失败：\(batteryChargeLimitError)" }
+    guard batteryChargeLimitState.isSupported else {
+      return "macOS 已阻止第三方写入；请使用系统原生充电上限"
+    }
+    if batteryChargeLimitState.isEnabled, let upper = batteryChargeLimitState.upperPercent {
+      return "固件正在维持 \(upper)% 上限"
+    }
+    return "由 macOS 正常充电至 100%"
+  }
+
   var fanText: String {
     if fanCapability == .unavailable { return "无风扇" }
     guard !fanReadings.isEmpty else { return "-- rpm" }
@@ -240,13 +271,25 @@ final class FanController: ObservableObject {
       averageRPM.map { value in
         value >= 1_000 ? String(format: "%.1fk", value / 1_000) : "\(Int(value.rounded()))"
       } ?? "--"
-    let effectiveMode =
-      hasControllableFans || menuBarDisplayMode == .iconOnly ? menuBarDisplayMode : .temperature
+    let battery = BatteryStatusPresentation.text(for: currentPower)
+    let effectiveMode: MenuBarDisplayMode =
+      if hasControllableFans {
+        menuBarDisplayMode
+      } else {
+        switch menuBarDisplayMode {
+        case .fanSpeed, .temperatureAndFan: .temperature
+        case .temperatureFanAndBattery: .temperatureAndBattery
+        default: menuBarDisplayMode
+        }
+      }
     return switch effectiveMode {
     case .iconOnly: ""
     case .temperature: temperature
     case .fanSpeed: rpm
     case .temperatureAndFan: "\(temperature)  \(rpm)"
+    case .battery: battery
+    case .temperatureAndBattery: "\(temperature)  \(battery)"
+    case .temperatureFanAndBattery: "\(temperature)  \(rpm)  \(battery)"
     }
   }
 
@@ -259,6 +302,9 @@ final class FanController: ObservableObject {
 
   var menuBarSymbolName: String {
     if menuBarPowerConnectionText != nil { return "powerplug.fill" }
+    if menuBarDisplayMode == .battery {
+      return BatteryStatusPresentation.symbolName(for: currentPower)
+    }
     return MenuBarPresentation.symbolName(state: state, hasControllableFans: !isFanless)
   }
 
@@ -386,6 +432,19 @@ final class FanController: ObservableObject {
     }
   }
 
+  func setBatteryChargeLimitEnabled(_ enabled: Bool) {
+    batteryChargeLimitEnabled = enabled
+    UserDefaults.standard.set(enabled, forKey: Self.batteryChargeLimitEnabledKey)
+    Task { await applyBatteryChargeLimit() }
+  }
+
+  func setBatteryChargeLimitPercent(_ value: Int) {
+    batteryChargeLimitPercent = min(100, max(80, value))
+    UserDefaults.standard.set(batteryChargeLimitPercent, forKey: Self.batteryChargeLimitPercentKey)
+    guard batteryChargeLimitEnabled else { return }
+    Task { await applyBatteryChargeLimit() }
+  }
+
   func start() {
     guard !hasStarted else { return }
     hasStarted = true
@@ -473,6 +532,15 @@ final class FanController: ObservableObject {
       if dashboardRefreshCountdown <= 0 {
         if let dashboard = try? await service.temperatureDashboard() {
           temperatureDashboard = dashboard
+        }
+        if let limitState = try? await service.batteryChargeLimitState() {
+          batteryChargeLimitState = limitState
+          if limitState.isSupported {
+            batteryChargeLimitEnabled = limitState.isEnabled
+            if let upper = limitState.upperPercent, (80...100).contains(upper) {
+              batteryChargeLimitPercent = upper
+            }
+          }
         }
         dashboardRefreshCountdown = 5
       } else {
@@ -822,7 +890,9 @@ final class FanController: ObservableObject {
     } else {
       isControlEnabled = false
       targetRPMs = []
-      if menuBarDisplayMode == .fanSpeed || menuBarDisplayMode == .temperatureAndFan {
+      if menuBarDisplayMode == .fanSpeed || menuBarDisplayMode == .temperatureAndFan
+        || menuBarDisplayMode == .temperatureFanAndBattery
+      {
         menuBarDisplayMode = .temperature
         UserDefaults.standard.set(
           MenuBarDisplayMode.temperature.rawValue, forKey: Self.menuBarDisplayKey)
@@ -854,5 +924,17 @@ final class FanController: ObservableObject {
   private static func powerText(_ value: Double?) -> String {
     guard let value else { return "-- W" }
     return String(format: "%.1f W", value)
+  }
+
+  private func applyBatteryChargeLimit() async {
+    do {
+      try await service.setBatteryChargeLimit(
+        enabled: batteryChargeLimitEnabled, upperPercent: batteryChargeLimitPercent)
+      batteryChargeLimitState = try await service.batteryChargeLimitState()
+      batteryChargeLimitError = nil
+    } catch {
+      batteryChargeLimitError = error.localizedDescription
+      if batteryChargeLimitEnabled { batteryChargeLimitEnabled = false }
+    }
   }
 }

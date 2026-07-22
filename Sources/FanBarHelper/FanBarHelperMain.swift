@@ -44,6 +44,30 @@ private final class HelperService: NSObject, FanBarHelperProtocol, @unchecked Se
     perform("reset override", reply) { try self.smc.resetControlOverride() }
   }
 
+  func setBatteryChargeLimit(
+    enabled: Bool, upperPercent: Int, withReply reply: @escaping @Sendable (String?) -> Void
+  ) {
+    perform("battery charge limit \(enabled ? upperPercent : 100)", reply) {
+      try self.smc.setBatteryChargeLimit(enabled: enabled, upperPercent: upperPercent)
+    }
+  }
+
+  func getBatteryChargeLimitState(
+    withReply reply: @escaping @Sendable (Bool, Bool, Int, Int, String?) -> Void
+  ) {
+    queue.async {
+      do {
+        try self.ensureOpen()
+        let state = try self.smc.batteryChargeLimitStateOrThrow()
+        reply(
+          state.isSupported, state.isEnabled, state.lowerPercent ?? -1,
+          state.upperPercent ?? -1, nil)
+      } catch {
+        reply(false, false, -1, -1, error.localizedDescription)
+      }
+    }
+  }
+
   func restoreAll() {
     logger.notice("restoreAll requested by connection lifecycle")
     queue.async {

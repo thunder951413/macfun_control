@@ -71,6 +71,7 @@ struct FanPopoverView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         menuBarSettings
+        chargeLimitSettings
         batterySettings
         if controller.isFanless {
           fanlessSettingsNotice
@@ -184,8 +185,14 @@ struct FanPopoverView: View {
       Label("电源与功耗", systemImage: "bolt.fill")
         .font(.callout).fontWeight(.medium)
       LazyVGrid(
-        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8
+        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8
       ) {
+        PowerMetricCard(
+          title: "电池状态",
+          value: controller.batteryLevelText,
+          subtitle: controller.batteryStatusText,
+          symbol: BatteryStatusPresentation.symbolName(for: controller.currentPower),
+          color: controller.currentPower?.isBatteryCharging == true ? .green : .blue)
         PowerMetricCard(
           title: "电源输入能力",
           value: controller.inputCapacityText,
@@ -404,6 +411,66 @@ struct FanPopoverView: View {
         .disabled(!controller.isBatteryCurveEnabled)
       }
     }
+  }
+
+  private var chargeLimitSettings: some View {
+    PopoverSection(title: "充电保护", symbol: "battery.100percent.bolt") {
+      SettingRow(
+        title: "电池充电上限", subtitle: controller.batteryChargeLimitSubtitle,
+        symbol: "shield.lefthalf.filled"
+      ) {
+        if controller.batteryChargeLimitState.isSupported {
+          Toggle(
+            "电池充电上限",
+            isOn: Binding(
+              get: { controller.batteryChargeLimitEnabled },
+              set: { controller.setBatteryChargeLimitEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+        } else {
+          Button("系统设置") { openBatterySettings() }
+            .controlSize(.mini)
+        }
+      }
+      SectionDivider()
+      SettingRow(
+        title: "上限电量", subtitle: "使用 macOS 固件级限制；低 5% 后恢复充电",
+        symbol: "gauge.with.dots.needle.50percent"
+      ) {
+        Picker(
+          "上限电量",
+          selection: Binding(
+            get: { controller.batteryChargeLimitPercent },
+            set: { controller.setBatteryChargeLimitPercent($0) }
+          )
+        ) {
+          ForEach(Array(stride(from: 80, through: 100, by: 5)), id: \.self) { value in
+            Text("\(value)%").tag(value)
+          }
+        }
+        .labelsHidden()
+        .frame(width: 92)
+        .disabled(
+          !controller.batteryChargeLimitState.isSupported
+            || !controller.batteryChargeLimitEnabled)
+      }
+      Text("固件会在达到上限后暂停充电，并在低于恢复点后重新充电；系统可能偶尔充至 100% 以校准电量估算。")
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+  }
+
+  private func openBatterySettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.battery?BatteryHealth")
+    else { return }
+    NSWorkspace.shared.open(url)
   }
 
   private var fanlessSettingsNotice: some View {

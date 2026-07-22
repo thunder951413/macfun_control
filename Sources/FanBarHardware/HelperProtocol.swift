@@ -14,6 +14,10 @@ public protocol FanBarHelperProtocol {
     _ rpm: Double, fan: Int, withReply reply: @escaping @Sendable (String?) -> Void)
   func setAutomaticMode(fan: Int, withReply reply: @escaping @Sendable (String?) -> Void)
   func resetControlOverride(withReply reply: @escaping @Sendable (String?) -> Void)
+  func setBatteryChargeLimit(
+    enabled: Bool, upperPercent: Int, withReply reply: @escaping @Sendable (String?) -> Void)
+  func getBatteryChargeLimitState(
+    withReply reply: @escaping @Sendable (Bool, Bool, Int, Int, String?) -> Void)
 }
 
 public enum FanBarHelperError: LocalizedError, Equatable {

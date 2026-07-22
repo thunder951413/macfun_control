@@ -23,16 +23,21 @@ public struct TemperatureReading: Sendable, Equatable, Identifiable {
 public struct PowerReading: Sendable, Equatable {
   public let isExternalPowerConnected: Bool
   public let isBatteryCharging: Bool
+  public let batteryLevelPercent: Int?
+  public let isBatteryFullyCharged: Bool
   public let inputCapacityWatts: Double?
   public let systemPowerWatts: Double?
   public let batteryChargingPowerWatts: Double?
 
   public init(
-    isExternalPowerConnected: Bool, isBatteryCharging: Bool, inputCapacityWatts: Double?,
+    isExternalPowerConnected: Bool, isBatteryCharging: Bool, batteryLevelPercent: Int? = nil,
+    isBatteryFullyCharged: Bool = false, inputCapacityWatts: Double?,
     systemPowerWatts: Double?, batteryChargingPowerWatts: Double?
   ) {
     self.isExternalPowerConnected = isExternalPowerConnected
     self.isBatteryCharging = isBatteryCharging
+    self.batteryLevelPercent = batteryLevelPercent
+    self.isBatteryFullyCharged = isBatteryFullyCharged
     self.inputCapacityWatts = inputCapacityWatts
     self.systemPowerWatts = systemPowerWatts
     self.batteryChargingPowerWatts = batteryChargingPowerWatts
@@ -46,6 +51,9 @@ public enum PowerTelemetryParser {
     let adapter = properties["AdapterDetails"] as? [String: Any]
     let distribution = properties["PowerDistribution"] as? [String: Any]
     let isCharging = connected && bool(properties["IsCharging"]) == true
+    let currentCapacity = number(properties["CurrentCapacity"])
+    let maximumCapacity = number(properties["MaxCapacity"])
+    let level = batteryPercent(current: currentCapacity, maximum: maximumCapacity)
     let inputCapacity =
       connected
       ? watts(number(adapter?["Watts"]))
@@ -62,6 +70,8 @@ public enum PowerTelemetryParser {
     return PowerReading(
       isExternalPowerConnected: connected,
       isBatteryCharging: isCharging,
+      batteryLevelPercent: level,
+      isBatteryFullyCharged: bool(properties["FullyCharged"]) == true || level == 100,
       inputCapacityWatts: inputCapacity,
       systemPowerWatts: system,
       batteryChargingPowerWatts: batteryChargingPower)
@@ -96,6 +106,35 @@ public enum PowerTelemetryParser {
     else { return nil }
     return voltageMillivolts * currentMilliamps / 1_000_000
   }
+
+  private static func batteryPercent(current: Double?, maximum: Double?) -> Int? {
+    guard let current, current.isFinite, current >= 0 else { return nil }
+    let value: Double
+    if let maximum, maximum.isFinite, maximum > 0, maximum != 100 {
+      value = current / maximum * 100
+    } else {
+      value = current
+    }
+    guard (0...100).contains(value) else { return nil }
+    return Int(value.rounded())
+  }
+}
+
+public struct BatteryChargeLimitState: Sendable, Equatable {
+  public let isSupported: Bool
+  public let isEnabled: Bool
+  public let lowerPercent: Int?
+  public let upperPercent: Int?
+
+  public init(isSupported: Bool, isEnabled: Bool, lowerPercent: Int?, upperPercent: Int?) {
+    self.isSupported = isSupported
+    self.isEnabled = isEnabled
+    self.lowerPercent = lowerPercent
+    self.upperPercent = upperPercent
+  }
+
+  public static let unsupported = BatteryChargeLimitState(
+    isSupported: false, isEnabled: false, lowerPercent: nil, upperPercent: nil)
 }
 
 public protocol FanHardware: Sendable {
@@ -109,6 +148,8 @@ public protocol FanHardware: Sendable {
   func batteryTemperatureReading() throws -> TemperatureReading
   func allTemperatureReadings() -> [TemperatureReading]
   func powerReading() -> PowerReading?
+  func batteryChargeLimitState() -> BatteryChargeLimitState
+  func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws
   func fanActualRPM(fan index: Int) throws -> Double
   func fanTargetRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
@@ -129,6 +170,10 @@ extension FanHardware {
   public func allTemperatureReadings() -> [TemperatureReading] { [] }
 
   public func powerReading() -> PowerReading? { nil }
+  public func batteryChargeLimitState() -> BatteryChargeLimitState { .unsupported }
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    throw SMCClient.SMCError.keyUnavailable("bfF0")
+  }
 
   public func fanTargetRPM(fan index: Int) throws -> Double {
     try fanActualRPM(fan: index)
@@ -147,6 +192,7 @@ extension FanHardware {
     else { throw SMCClient.SMCError.noTemperatureKey }
     return reading
   }
+
 }
 
 public final class SMCClient: FanHardware, @unchecked Sendable {
@@ -347,6 +393,60 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     return reading
   }
 
+  public func batteryChargeLimitState() -> BatteryChargeLimitState {
+    (try? batteryChargeLimitStateOrThrow()) ?? .unsupported
+  }
+
+  public func batteryChargeLimitStateOrThrow() throws -> BatteryChargeLimitState {
+    let activation = try readKey("bfF0")
+    guard activation.bytes.count == 1 else { throw SMCError.invalidValue("bfF0") }
+    let lower = try readFirmwarePercent("bfE0")
+    let upper = try readFirmwarePercent("bfD0")
+    return BatteryChargeLimitState(
+      isSupported: true, isEnabled: activation.bytes[0] == 0x02,
+      lowerPercent: lower, upperPercent: upper)
+  }
+
+  public func batteryChargeControlKeyNames() -> [String] {
+    (try? allKeys().filter {
+      ["bfF0", "bfD0", "bfE0", "CHTE", "CH0B", "CH0C", "BCLM"].contains($0)
+    }) ?? []
+  }
+
+  public func batteryChargeControlDiagnostics() -> [String] {
+    ["bfF0", "bfD0", "bfE0", "CHTE", "CH0B", "CH0C", "BCLM"].map { key in
+      do {
+        let value = try readKey(key)
+        return "\(key):\(value.type):\(value.bytes.map { String(format: "%02x", $0) }.joined())"
+      } catch {
+        return "\(key):unavailable"
+      }
+    }
+  }
+
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    _ = try batteryChargeLimitStateOrThrow()
+    if !enabled {
+      try writeKey("bfF0", bytes: [0x00])
+      return
+    }
+    guard (80...100).contains(upperPercent) else { throw SMCError.invalidValue("bfD0") }
+    let lowerPercent = max(75, upperPercent - 5)
+    // Firmware requires deactivation before updating both hysteresis bounds.
+    try writeKey("bfF0", bytes: [0x00])
+    try writeFirmwarePercent("bfD0", value: upperPercent)
+    try writeFirmwarePercent("bfE0", value: lowerPercent)
+    try writeKey("bfF0", bytes: [0x02])
+    let verified = try batteryChargeLimitStateOrThrow()
+    guard verified.isEnabled, verified.upperPercent == upperPercent,
+      verified.lowerPercent == lowerPercent
+    else {
+      throw SMCError.verificationFailed(
+        "battery charge limit", expected: Double(upperPercent),
+        actual: Double(verified.upperPercent ?? -1))
+    }
+  }
+
   public static func robustAverage(_ values: [Double]) -> Double? {
     let sorted = values.filter(\.isFinite).sorted()
     guard !sorted.isEmpty else { return nil }
@@ -391,8 +491,8 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     else { return nil }
     var values: [String: Any] = ["ExternalConnected": connected]
     for key in [
-      "IsCharging", "Voltage", "Amperage", "AdapterDetails", "PowerDistribution",
-      "PowerTelemetryData",
+      "IsCharging", "FullyCharged", "CurrentCapacity", "MaxCapacity", "Voltage", "Amperage",
+      "AdapterDetails", "PowerDistribution", "PowerTelemetryData",
     ] {
       if let value = IORegistryEntryCreateCFProperty(
         service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
@@ -553,6 +653,10 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       return Double(data.bytes[0])
     case "ui16" where data.bytes.count >= 2:
       return Double(UInt16(data.bytes[0]) << 8 | UInt16(data.bytes[1]))
+    case "ui32" where data.bytes.count >= 4:
+      return Double(
+        UInt32(data.bytes[0]) << 24 | UInt32(data.bytes[1]) << 16
+          | UInt32(data.bytes[2]) << 8 | UInt32(data.bytes[3]))
     default:
       throw SMCError.keyUnavailable(key)
     }
@@ -562,6 +666,29 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     let data = try readKey(key)
     guard let first = data.bytes.first else { throw SMCError.keyUnavailable(key) }
     return first
+  }
+
+  private func readFirmwarePercent(_ key: String) throws -> Int {
+    let data = try readKey(key)
+    guard data.type == "ui32", data.bytes.count == 4 else {
+      throw SMCError.keyUnavailable(key)
+    }
+    // macOS 27 firmware charge-limit keys are exceptional little-endian ui32 values.
+    let value =
+      UInt32(data.bytes[0]) | UInt32(data.bytes[1]) << 8
+      | UInt32(data.bytes[2]) << 16 | UInt32(data.bytes[3]) << 24
+    guard value <= 100 else { throw SMCError.invalidValue(key) }
+    return Int(value)
+  }
+
+  private func writeFirmwarePercent(_ key: String, value: Int) throws {
+    guard (0...100).contains(value) else { throw SMCError.invalidValue(key) }
+    let raw = UInt32(value)
+    try writeKey(
+      key,
+      bytes: [
+        UInt8(raw & 0xff), UInt8((raw >> 8) & 0xff), UInt8((raw >> 16) & 0xff), UInt8(raw >> 24),
+      ])
   }
 
   private func writeUInt8(_ key: String, value: UInt8) throws {

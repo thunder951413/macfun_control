@@ -423,9 +423,11 @@ struct MenuBarDisplayModeTests {
         == "thermometer.medium")
   }
 
-  @Test("fanless devices only offer temperature menu bar modes")
+  @Test("fanless devices retain temperature and battery menu bar modes")
   func fanlessMenuModes() {
-    #expect(MenuBarDisplayMode.available(hasControllableFans: false) == [.iconOnly, .temperature])
+    #expect(
+      MenuBarDisplayMode.available(hasControllableFans: false)
+        == [.iconOnly, .temperature, .battery, .temperatureAndBattery])
     #expect(MenuBarDisplayMode.available(hasControllableFans: true) == MenuBarDisplayMode.allCases)
   }
 
@@ -444,25 +446,27 @@ struct MenuBarDisplayModeTests {
     #expect(!controller.hasControllableFans)
     #expect(controller.state == .monitoring)
     #expect(controller.menuBarSymbolName == "thermometer.medium")
-    #expect(controller.availableMenuBarDisplayModes == [.iconOnly, .temperature])
+    #expect(
+      controller.availableMenuBarDisplayModes
+        == [.iconOnly, .temperature, .battery, .temperatureAndBattery])
     #expect(controller.statusText.contains("仅监控") || controller.statusText.contains("监控温度"))
     _ = await controller.shutdown()
   }
 
   @Test("popover height adapts to tab and sensor rows")
   func popoverHeightAdapts() {
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 600)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 2) == 668)
     #expect(
       PopoverTab.sensors.preferredHeight(sensorGroupCount: 7)
         > PopoverTab.sensors.preferredHeight(sensorGroupCount: 2))
-    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 7) == 722)
+    #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 7) == 780)
     #expect(PopoverTab.sensors.preferredHeight(sensorGroupCount: 100) == 780)
     #expect(
       PopoverTab.sensors.preferredHeight(
-        sensorGroupCount: 2, hasControllableFans: false) == 590)
-    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 620)
+        sensorGroupCount: 2, hasControllableFans: false) == 658)
+    #expect(PopoverTab.settings.preferredHeight(sensorGroupCount: 0) == 700)
     #expect(
-      PopoverTab.settings.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 500)
+      PopoverTab.settings.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 590)
     #expect(PopoverSizing.height(preferred: 628, visibleScreenHeight: 900) == 628)
     #expect(PopoverSizing.height(preferred: 700, visibleScreenHeight: 600) == 568)
     #expect(PopoverSizing.height(preferred: 628, visibleScreenHeight: nil) == 628)
@@ -538,6 +542,40 @@ struct MenuBarDisplayModeTests {
       !PowerConnectionNotice.isVisible(
         until: start.addingTimeInterval(2), now: start.addingTimeInterval(2)))
   }
+
+  @Test("battery status text distinguishes charging, held, and battery power")
+  func batteryStatusPresentation() {
+    let charging = PowerReading(
+      isExternalPowerConnected: true, isBatteryCharging: true, batteryLevelPercent: 74,
+      inputCapacityWatts: 67, systemPowerWatts: 20, batteryChargingPowerWatts: 12)
+    #expect(BatteryStatusPresentation.text(for: charging) == "74% ⚡︎")
+    #expect(BatteryStatusPresentation.symbolName(for: charging).contains("bolt"))
+    let held = PowerReading(
+      isExternalPowerConnected: true, isBatteryCharging: false, batteryLevelPercent: 80,
+      inputCapacityWatts: 67, systemPowerWatts: 20, batteryChargingPowerWatts: nil)
+    #expect(BatteryStatusPresentation.text(for: held) == "80% ⏸")
+    let battery = PowerReading(
+      isExternalPowerConnected: false, isBatteryCharging: false, batteryLevelPercent: 63,
+      inputCapacityWatts: nil, systemPowerWatts: 12, batteryChargingPowerWatts: nil)
+    #expect(BatteryStatusPresentation.text(for: battery) == "63%")
+  }
+
+  @Test("fanless controller can use battery-only menu bar status")
+  @MainActor
+  func fanlessBatteryMenuStatus() async {
+    let hardware = MockFanHardware()
+    hardware.count = 0
+    hardware.power = PowerReading(
+      isExternalPowerConnected: false, isBatteryCharging: false, batteryLevelPercent: 63,
+      inputCapacityWatts: nil, systemPowerWatts: 12, batteryChargingPowerWatts: nil)
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600)
+    await controller.refresh()
+    controller.setMenuBarDisplayMode(.battery)
+    #expect(controller.menuBarText == "63%")
+    #expect(controller.menuBarSymbolName == "battery.75percent")
+    _ = await controller.shutdown()
+  }
 }
 
 @Suite("CPU temperature selection")
@@ -548,6 +586,8 @@ struct CPUTemperatureSelectionTests {
       PowerTelemetryParser.parse(properties: [
         "ExternalConnected": true,
         "IsCharging": true,
+        "CurrentCapacity": 74,
+        "MaxCapacity": 100,
         "AdapterDetails": ["Watts": 96],
         "PowerDistribution": ["IPDWattageOverride": 140_000],
         "PowerTelemetryData": [
@@ -561,6 +601,7 @@ struct CPUTemperatureSelectionTests {
     #expect(connected.systemPowerWatts == 31.25)
     #expect(connected.isBatteryCharging)
     #expect(connected.batteryChargingPowerWatts == 34.125)
+    #expect(connected.batteryLevelPercent == 74)
 
     let negotiatedFallback = try #require(
       PowerTelemetryParser.parse(properties: [

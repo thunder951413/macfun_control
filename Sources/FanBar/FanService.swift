@@ -85,6 +85,16 @@ actor FanService {
       package: package, coreAverage: coreAverage, hotspot: hotspot, readings: readings)
   }
 
+  func batteryChargeLimitState() throws -> BatteryChargeLimitState {
+    if !hardware.isOpen { try hardware.open() }
+    return hardware.batteryChargeLimitState()
+  }
+
+  func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    if !hardware.isOpen { try hardware.open() }
+    try hardware.setBatteryChargeLimit(enabled: enabled, upperPercent: upperPercent)
+  }
+
   func observeAutomaticDemand(
     source: CPUTemperatureSource = .package, observationCount: Int = 4,
     interval: Duration = .milliseconds(200)

@@ -2,6 +2,10 @@
 
 FanBar is a macOS 14+ menu bar app that monitors CPU temperature and can apply a conservative fan safety curve through AppleSMC.
 
+Battery level, charging or held state, adapter capacity, live system power, and battery charge power are available in the sensor dashboard. Menu bar modes can show battery percentage and charging state alone or alongside temperature and fan RPM, so FanBar can replace the system battery item for daily monitoring.
+
+On Macs that expose writable firmware charge-limit keys, FanBar can configure an 80–100% upper limit with a 5% recharge hysteresis. Current macOS releases may deny third-party access even to an authorized helper; FanBar detects that condition, performs no write, and links to Apple's native Battery settings instead of presenting a non-functional switch.
+
 Fan writes are performed by a separately signed, root LaunchDaemon registered with macOS `SMAppService`. The menu bar app remains unprivileged and communicates with the helper over an authenticated XPC connection.
 
 The popover separates live sensor summaries from settings. Its General section controls menu bar content, the fan-curve temperature source, high-hotspot alerts, and the optional macOS login item. FanBar does not enable launch at login unless the user turns it on.

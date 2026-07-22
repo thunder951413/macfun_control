@@ -195,6 +195,18 @@ struct FanBarMain {
       }
       return true
     }
+    if arguments.contains("--charge-limit-status") {
+      do {
+        let state = try PrivilegedFanClient().batteryChargeLimitState()
+        print(
+          "supported=\(state.isSupported) enabled=\(state.isEnabled) lower=\(state.lowerPercent.map(String.init) ?? "--") upper=\(state.upperPercent.map(String.init) ?? "--")"
+        )
+      } catch {
+        print("charge-limit-error=\(error.localizedDescription)")
+        exit(EXIT_FAILURE)
+      }
+      return true
+    }
     if arguments.contains("--helper-self-test") {
       if !runHelperSelfTest() { exit(EXIT_FAILURE) }
       return true
@@ -268,6 +280,12 @@ struct FanBarMain {
           "power.external=\(power.isExternalPowerConnected) charging=\(power.isBatteryCharging) input=\(input)W system=\(system)W battery=\(charging)W"
         )
       }
+      let chargeLimit = smc.batteryChargeLimitState()
+      print(
+        "battery.charge-limit supported=\(chargeLimit.isSupported) enabled=\(chargeLimit.isEnabled) lower=\(chargeLimit.lowerPercent.map(String.init) ?? "--") upper=\(chargeLimit.upperPercent.map(String.init) ?? "--")"
+      )
+      print("battery.charge-keys=\(smc.batteryChargeControlKeyNames().joined(separator: ","))")
+      print("battery.charge-values=\(smc.batteryChargeControlDiagnostics().joined(separator: ","))")
       for fan in 0..<count {
         print(
           "fan=\(fan) mode=\(try smc.fanMode(fan: fan)) actual=\(try smc.fanActualRPM(fan: fan)) target=\(try smc.fanTargetRPM(fan: fan)) min=\(try smc.fanMinimumRPM(fan: fan)) max=\(try smc.fanMaximumRPM(fan: fan))"
