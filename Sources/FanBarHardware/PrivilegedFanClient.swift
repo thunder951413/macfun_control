@@ -20,6 +20,21 @@ public final class PrivilegedFanClient: @unchecked Sendable {
     }
   }
 
+  private final class ChargeStateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<BatteryChargeLimitState, Error>?
+    func set(_ value: Result<BatteryChargeLimitState, Error>) {
+      lock.lock()
+      self.value = value
+      lock.unlock()
+    }
+    func get() -> Result<BatteryChargeLimitState, Error>? {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+  }
+
   private let lock = NSLock()
   private var connection: NSXPCConnection?
 
@@ -47,6 +62,43 @@ public final class PrivilegedFanClient: @unchecked Sendable {
 
   public func resetControlOverride() throws {
     try request(timeout: 5) { proxy, reply in proxy.resetControlOverride(withReply: reply) }
+  }
+
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    try request(timeout: 5) { proxy, reply in
+      proxy.setBatteryChargeLimit(
+        enabled: enabled, upperPercent: upperPercent, withReply: reply)
+    }
+  }
+
+  public func batteryChargeLimitState() throws -> BatteryChargeLimitState {
+    let semaphore = DispatchSemaphore(value: 0)
+    let result = ChargeStateBox()
+    let connection = try activeConnection()
+    guard
+      let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+        result.set(.failure(FanBarHelperError.unavailable(error.localizedDescription)))
+        semaphore.signal()
+      }) as? FanBarHelperProtocol
+    else { throw FanBarHelperError.unavailable("XPC protocol negotiation failed") }
+    proxy.getBatteryChargeLimitState { supported, enabled, lower, upper, error in
+      if let error {
+        result.set(.failure(FanBarHelperError.rejected(error)))
+      } else {
+        result.set(
+          .success(
+            BatteryChargeLimitState(
+              isSupported: supported, isEnabled: enabled,
+              lowerPercent: lower >= 0 ? lower : nil,
+              upperPercent: upper >= 0 ? upper : nil)))
+      }
+      semaphore.signal()
+    }
+    guard semaphore.wait(timeout: .now() + 5) == .success else {
+      invalidate()
+      throw FanBarHelperError.timedOut
+    }
+    return try result.get()!.get()
   }
 
   public func invalidate() {
@@ -131,7 +183,24 @@ public final class RoutedFanHardware: FanHardware, @unchecked Sendable {
   public func cpuTemperature(source: CPUTemperatureSource) throws -> Double {
     try local.cpuTemperature(source: source)
   }
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    try local.cpuHotspotReading()
+  }
+  public func batteryTemperatureReading() throws -> TemperatureReading {
+    try local.batteryTemperatureReading()
+  }
+  public func allTemperatureReadings() -> [TemperatureReading] {
+    local.allTemperatureReadings()
+  }
+  public func powerReading() -> PowerReading? { local.powerReading() }
+  public func batteryChargeLimitState() -> BatteryChargeLimitState {
+    (try? helper.batteryChargeLimitState()) ?? local.batteryChargeLimitState()
+  }
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    try helper.setBatteryChargeLimit(enabled: enabled, upperPercent: upperPercent)
+  }
   public func fanActualRPM(fan index: Int) throws -> Double { try local.fanActualRPM(fan: index) }
+  public func fanTargetRPM(fan index: Int) throws -> Double { try local.fanTargetRPM(fan: index) }
   public func fanMinimumRPM(fan index: Int) throws -> Double { try local.fanMinimumRPM(fan: index) }
   public func fanMaximumRPM(fan index: Int) throws -> Double { try local.fanMaximumRPM(fan: index) }
   public func fanMode(fan index: Int) throws -> UInt8 { try local.fanMode(fan: index) }

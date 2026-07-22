@@ -2,15 +2,31 @@
 
 FanBar is a macOS 14+ menu bar app that monitors CPU temperature and can apply a conservative fan safety curve through AppleSMC.
 
+Battery level, charging or held state, adapter capacity, live system power, and battery charge power are available in the sensor dashboard. Menu bar modes can show battery status alone or alongside temperature and fan RPM, so FanBar can replace the system battery item for daily monitoring. The Battery tab includes FanBar Status, macOS Native, macOS Colored, and iOS Native battery treatments, plus independent icon and percentage controls; the compact iOS treatment embeds the percentage directly in its battery shape.
+
+On Macs that expose writable firmware charge-limit keys, FanBar can configure an 80–100% upper limit with a 5% recharge hysteresis. Current macOS releases may deny third-party access even to an authorized helper; FanBar detects that condition, performs no write, and links to Apple's native Battery settings instead of presenting a non-functional switch.
+
 Fan writes are performed by a separately signed, root LaunchDaemon registered with macOS `SMAppService`. The menu bar app remains unprivileged and communicates with the helper over an authenticated XPC connection.
 <img width="531" height="705" alt="image" src="https://github.com/user-attachments/assets/9cb25622-464f-4c1c-96c3-43c5edd4bcae" />
+
+The popover uses three focused tabs: Sensors, Battery, and Fans. Each tab owns its live status and relevant settings, including an independent switch for placing that category in the menu bar. FanBar does not enable launch at login unless the user turns it on.
+
+Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0T`, `TB1T`, or `TB2T`). Users can configure a menu bar alert threshold and optionally enable a separate battery curve. CPU and battery curves are combined by taking the higher requested fan target; the battery curve reaches maximum speed at 50°C.
+
+The shared 0.5×–2.0× acceleration factor smoothly reshapes both curves without changing their start or maximum-temperature endpoints. FanBar enters manual mode only when its curve target is meaningfully higher than the target reported by macOS at takeover. Once active, the smooth curve remains continuous and does not periodically switch back to automatic control. The captured macOS target remains the safety floor while asymmetric slew limiting lets the fan follow both rising and falling curve demand. FanBar stores no learned fan curve or historical training data; 90°C emergencies request maximum speed immediately.
+
+The Battery tab reads Apple's power data in the shared sampling cycle. It separately shows the connected adapter's negotiated input capacity, live system load, and real battery-side charging power. Charging power uses Apple's battery telemetry with voltage/current fallback and is hidden as a watt value when the battery is not charging. A newly connected power source temporarily replaces the normal menu bar content with a plug icon and the negotiated watts for two seconds. The Sensor tab offers 2-second responsive, 3-second balanced, and 5-second efficient sampling; changing it reschedules the single shared timer immediately without adding a second hardware polling loop.
+
+Fan capability is detected from AppleSMC rather than a model-name list. When `FNum` reports zero controllable fans, FanBar enters temperature-only monitoring mode: it uses a thermometer menu bar icon, removes fan-speed display modes and every fan-control curve, skips privileged-helper registration, and keeps sensor monitoring plus CPU and battery alerts available.
 
 ## Safety behavior
 
 - Fresh installs start in **monitor-only mode**. Fan writes require an explicit toggle.
-- Manual control starts only above the selected 55–80°C threshold.
+- Manual control starts only above the selected 40–80°C threshold.
 - A 3°C hysteresis band prevents repeated mode switching near the threshold.
-- A manual target is never lower than the fan's current speed.
+- Initial takeover never lowers the fan's current speed. During the session, targets may descend smoothly but never below the macOS target captured at takeover.
+- FanBar validates the hardware mode every sample and again before each write. Full ownership loss yields to macOS for that cycle; partial loss restores the whole fan group; externally owned manual modes are not claimed.
+- The acceleration factor reshapes desired targets while the asymmetric RPM slew limiter remains authoritative.
 - At 90°C, FanBar requests the hardware-reported maximum speed.
 - Invalid sensor data, partial multi-fan writes, sleep, disabling control, and normal quit all trigger an automatic-mode restore.
 - Restore first reads the current mode and performs no write when macOS already owns the fans.
@@ -18,7 +34,7 @@ Fan writes are performed by a separately signed, root LaunchDaemon registered wi
 - The helper accepts only the signed FanBar client from the same Apple Developer team and validates fan indices and RPM ranges again before writing.
 - If automatic control cannot be restored, FanBar shows an alert and cancels normal termination so it can retry.
 
-> AppleSMC is a private, model-dependent interface. FanBar validates all values it uses, probes mode-key variants, supports legacy `fpe2` and Apple Silicon little-endian float values, and verifies writes. It still cannot guarantee compatibility with every Mac or protect against force-quit, process crashes, firmware faults, or another fan-control tool. Do not run multiple fan-control apps together.
+> AppleSMC is a private, model-dependent interface. FanBar validates all values it uses, probes mode-key variants, supports legacy `fpe2` and Apple Silicon little-endian float values, and verifies writes. The helper restores automatic control when the app disconnects, including force-quit and process crashes, but FanBar still cannot guarantee compatibility with every Mac or protect against firmware faults or another fan-control tool. Do not run multiple fan-control apps together.
 
 ## Build and test
 
@@ -60,4 +76,5 @@ The certificate secret must contain a Developer ID Application identity and its 
 - `FanBarHelper` is the minimal root daemon that owns SMC writes and restores automatic control when the last authenticated client disconnects.
 - `FanService` serializes hardware access and owns transactional multi-fan rollback.
 - `FanSafetyPolicy` is a pure, unit-tested curve and hysteresis policy.
-- `FanController` owns polling, UI state, error fallback, sleep/wake, and shutdown behavior.
+- `FanControlLoop` owns takeover floors, CPU/battery decision combination, cooldown confirmation, and asymmetric target slew limiting.
+- `FanController` orchestrates sampling and UI/lifecycle state while delegating control decisions to `FanControlLoop`.

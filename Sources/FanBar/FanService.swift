@@ -1,5 +1,6 @@
 import FanBarHardware
 import Foundation
+import OSLog
 
 enum FanServiceError: LocalizedError, Equatable {
   case invalidFanCount(Int)
@@ -18,7 +19,16 @@ enum FanServiceError: LocalizedError, Equatable {
   }
 }
 
+enum ManualControlIntegrity: Equatable {
+  case none
+  case external
+  case intact
+  case lost
+  case partial
+}
+
 actor FanService {
+  private let logger = Logger(subsystem: "local.fanbar", category: "fan-service")
   private let hardware: any FanHardware
   private var count = 0
   private var manualFans = Set<Int>()
@@ -30,15 +40,22 @@ actor FanService {
   func prepare(source: CPUTemperatureSource = .package) throws -> FanSnapshot {
     if !hardware.isOpen { try hardware.open() }
     count = try hardware.fanCount()
-    guard (1...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+    guard (0...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
     return try sample(source: source)
   }
 
   func sample(source: CPUTemperatureSource = .package) throws -> FanSnapshot {
     guard hardware.isOpen else { return try prepare(source: source) }
-    let temperature = try hardware.cpuTemperature(source: source)
-    let hotspot =
-      source == .hotspot ? temperature : try? hardware.cpuTemperature(source: .hotspot)
+    let hotspotReading = try? hardware.cpuHotspotReading()
+    let batteryReading = try? hardware.batteryTemperatureReading()
+    let powerReading = hardware.powerReading()
+    let temperature =
+      if source == .hotspot, let hotspotReading {
+        hotspotReading.value
+      } else {
+        try hardware.cpuTemperature(source: source)
+      }
+    let hotspot = hotspotReading?.value
     guard temperature.isFinite, (0...125).contains(temperature) else {
       throw SMCClient.SMCError.invalidValue("CPU temperature")
     }
@@ -46,23 +63,51 @@ actor FanService {
     var fans: [FanReading] = []
     for index in 0..<count {
       let actual = try hardware.fanActualRPM(fan: index)
+      let reportedTarget = try hardware.fanTargetRPM(fan: index)
+      let mode = try hardware.fanMode(fan: index)
       let minimum = try hardware.fanMinimumRPM(fan: index)
       let maximum = try hardware.fanMaximumRPM(fan: index)
       guard actual.isFinite, minimum.isFinite, maximum.isFinite,
         minimum >= 0, maximum > minimum, maximum <= 20_000,
-        actual >= 0, actual <= 20_000
+        actual >= 0, actual <= 20_000,
+        reportedTarget.isFinite, reportedTarget >= 0, reportedTarget <= 20_000
       else {
         throw FanServiceError.invalidFanRange(index)
       }
       fans.append(
         FanReading(
           index: index, actualRPM: actual,
+          reportedTargetRPM: reportedTarget,
+          mode: mode,
           minimumRPM: minimum, maximumRPM: maximum))
     }
-    return FanSnapshot(temperature: temperature, hotspotTemperature: hotspot, fans: fans)
+    return FanSnapshot(
+      temperature: temperature, hotspotTemperature: hotspot,
+      hotspotSource: hotspotReading?.key, batteryTemperature: batteryReading?.value,
+      batterySource: batteryReading?.key, power: powerReading, fans: fans)
   }
 
-  func apply(targets: [Double], snapshot: FanSnapshot) throws {
+  func temperatureDashboard() throws -> TemperatureDashboard {
+    if !hardware.isOpen { try hardware.open() }
+    let package = try? hardware.cpuTemperature(source: .package)
+    let coreAverage = try? hardware.cpuTemperature(source: .coreAverage)
+    let hotspot = try? hardware.cpuTemperature(source: .hotspot)
+    let readings = hardware.allTemperatureReadings()
+    return TemperatureDashboard(
+      package: package, coreAverage: coreAverage, hotspot: hotspot, readings: readings)
+  }
+
+  func batteryChargeLimitState() throws -> BatteryChargeLimitState {
+    if !hardware.isOpen { try hardware.open() }
+    return hardware.batteryChargeLimitState()
+  }
+
+  func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    if !hardware.isOpen { try hardware.open() }
+    try hardware.setBatteryChargeLimit(enabled: enabled, upperPercent: upperPercent)
+  }
+
+  func apply(targets: [Double], snapshot: FanSnapshot) async throws {
     guard targets.count == count, snapshot.fans.count == count else {
       throw FanServiceError.targetCountMismatch
     }
@@ -71,25 +116,37 @@ actor FanService {
       for index in 0..<count {
         let fan = snapshot.fans[index]
         let target = min(fan.maximumRPM, max(fan.minimumRPM, targets[index]))
-        if !manualFans.contains(index) {
+        let mode = try hardware.fanMode(fan: index)
+        if mode == 0 || mode == 3 {
           try hardware.setManualMode(fan: index)
-          manualFans.insert(index)
         }
+        manualFans.insert(index)
         try hardware.setTargetRPM(target, fan: index)
       }
     } catch {
       // A partial multi-fan transition is unsafe. Roll back every fan,
       // including fans whose local state was not updated yet.
-      try? restoreAutomatic()
+      do {
+        try await restoreAutomatic()
+      } catch let rollbackError {
+        logger.fault(
+          "fan apply rollback failed original=\(error.localizedDescription, privacy: .public) rollback=\(rollbackError.localizedDescription, privacy: .public)"
+        )
+      }
       throw error
     }
   }
 
-  func restoreAutomatic() throws {
+  func restoreAutomatic() async throws {
     if !hardware.isOpen {
       try hardware.open()
       count = try hardware.fanCount()
-      guard (1...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+      guard (0...8).contains(count) else { throw FanServiceError.invalidFanCount(count) }
+    }
+
+    if count == 0 {
+      manualFans.removeAll()
+      return
     }
 
     var failures: [String] = []
@@ -119,7 +176,7 @@ actor FanService {
           guard let mode = try? hardware.fanMode(fan: index) else { return true }
           return mode != 0 && mode != 3
         }
-        if !pending.isEmpty { Thread.sleep(forTimeInterval: 0.2) }
+        if !pending.isEmpty { try await Task.sleep(for: .milliseconds(200)) }
       } while !pending.isEmpty && Date() < deadline
       if !pending.isEmpty {
         failures.append("fans still manual after restore: \(pending.map { $0 + 1 })")
@@ -134,6 +191,23 @@ actor FanService {
   }
 
   func isManual() -> Bool { !manualFans.isEmpty }
+
+  func reconcileManualControl(snapshot: FanSnapshot) -> ManualControlIntegrity {
+    let actualManualFans = Set(
+      snapshot.fans.compactMap { fan -> Int? in
+        guard let mode = fan.mode, mode != 0, mode != 3 else { return nil }
+        return fan.index
+      })
+    guard !manualFans.isEmpty else {
+      return actualManualFans.isEmpty ? .none : .external
+    }
+    if actualManualFans == manualFans { return .intact }
+    if actualManualFans.isEmpty {
+      manualFans.removeAll()
+      return .lost
+    }
+    return .partial
+  }
 
   func close() {
     hardware.close()

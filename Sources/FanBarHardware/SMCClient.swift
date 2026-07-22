@@ -1,11 +1,140 @@
-import Foundation
 import FanBarC
+import Foundation
 import IOKit
 
 public enum CPUTemperatureSource: String, CaseIterable, Sendable {
   case package
   case coreAverage
   case hotspot
+}
+
+public struct TemperatureReading: Sendable, Equatable, Identifiable {
+  public let key: String
+  public let value: Double
+
+  public var id: String { key }
+
+  public init(key: String, value: Double) {
+    self.key = key
+    self.value = value
+  }
+}
+
+public struct PowerReading: Sendable, Equatable {
+  public let isExternalPowerConnected: Bool
+  public let isBatteryCharging: Bool
+  public let batteryLevelPercent: Int?
+  public let isBatteryFullyCharged: Bool
+  public let inputCapacityWatts: Double?
+  public let systemPowerWatts: Double?
+  public let batteryChargingPowerWatts: Double?
+
+  public init(
+    isExternalPowerConnected: Bool, isBatteryCharging: Bool, batteryLevelPercent: Int? = nil,
+    isBatteryFullyCharged: Bool = false, inputCapacityWatts: Double?,
+    systemPowerWatts: Double?, batteryChargingPowerWatts: Double?
+  ) {
+    self.isExternalPowerConnected = isExternalPowerConnected
+    self.isBatteryCharging = isBatteryCharging
+    self.batteryLevelPercent = batteryLevelPercent
+    self.isBatteryFullyCharged = isBatteryFullyCharged
+    self.inputCapacityWatts = inputCapacityWatts
+    self.systemPowerWatts = systemPowerWatts
+    self.batteryChargingPowerWatts = batteryChargingPowerWatts
+  }
+}
+
+public enum PowerTelemetryParser {
+  public static func parse(properties: [String: Any]) -> PowerReading? {
+    guard let connected = bool(properties["ExternalConnected"]) else { return nil }
+    let telemetry = properties["PowerTelemetryData"] as? [String: Any]
+    let adapter = properties["AdapterDetails"] as? [String: Any]
+    let distribution = properties["PowerDistribution"] as? [String: Any]
+    let isCharging = connected && bool(properties["IsCharging"]) == true
+    let currentCapacity = number(properties["CurrentCapacity"])
+    let maximumCapacity = number(properties["MaxCapacity"])
+    let level = batteryPercent(current: currentCapacity, maximum: maximumCapacity)
+    let inputCapacity =
+      connected
+      ? watts(number(adapter?["Watts"]))
+        ?? watts(fromMilliwatts: number(distribution?["IPDWattageOverride"]))
+      : nil
+    let system = watts(fromMilliwatts: number(telemetry?["SystemLoad"]))
+    let batteryChargingPower =
+      isCharging
+      ? watts(fromMilliwatts: number(telemetry?["BatteryPower"]))
+        ?? watts(
+          voltageMillivolts: number(properties["Voltage"]),
+          currentMilliamps: number(properties["Amperage"]))
+      : nil
+    return PowerReading(
+      isExternalPowerConnected: connected,
+      isBatteryCharging: isCharging,
+      batteryLevelPercent: level,
+      isBatteryFullyCharged: bool(properties["FullyCharged"]) == true || level == 100,
+      inputCapacityWatts: inputCapacity,
+      systemPowerWatts: system,
+      batteryChargingPowerWatts: batteryChargingPower)
+  }
+
+  private static func bool(_ value: Any?) -> Bool? {
+    if let value = value as? Bool { return value }
+    if let value = value as? NSNumber { return value.boolValue }
+    return nil
+  }
+
+  private static func number(_ value: Any?) -> Double? {
+    (value as? NSNumber)?.doubleValue
+  }
+
+  private static func watts(fromMilliwatts value: Double?) -> Double? {
+    guard let value, value.isFinite, (0...500_000).contains(value) else { return nil }
+    return value / 1_000
+  }
+
+  private static func watts(_ value: Double?) -> Double? {
+    guard let value, value.isFinite, (0...500).contains(value) else { return nil }
+    return value
+  }
+
+  private static func watts(
+    voltageMillivolts: Double?, currentMilliamps: Double?
+  ) -> Double? {
+    guard let voltageMillivolts, let currentMilliamps,
+      voltageMillivolts.isFinite, currentMilliamps.isFinite,
+      (0...30_000).contains(voltageMillivolts), (0...20_000).contains(currentMilliamps)
+    else { return nil }
+    return voltageMillivolts * currentMilliamps / 1_000_000
+  }
+
+  private static func batteryPercent(current: Double?, maximum: Double?) -> Int? {
+    guard let current, current.isFinite, current >= 0 else { return nil }
+    let value: Double
+    if let maximum, maximum.isFinite, maximum > 0, maximum != 100 {
+      value = current / maximum * 100
+    } else {
+      value = current
+    }
+    guard (0...100).contains(value) else { return nil }
+    return Int(value.rounded())
+  }
+}
+
+public struct BatteryChargeLimitState: Sendable, Equatable {
+  public let isSupported: Bool
+  public let isEnabled: Bool
+  public let lowerPercent: Int?
+  public let upperPercent: Int?
+
+  public init(isSupported: Bool, isEnabled: Bool, lowerPercent: Int?, upperPercent: Int?) {
+    self.isSupported = isSupported
+    self.isEnabled = isEnabled
+    self.lowerPercent = lowerPercent
+    self.upperPercent = upperPercent
+  }
+
+  public static let unsupported = BatteryChargeLimitState(
+    isSupported: false, isEnabled: false, lowerPercent: nil, upperPercent: nil)
 }
 
 public protocol FanHardware: Sendable {
@@ -15,7 +144,14 @@ public protocol FanHardware: Sendable {
   func fanCount() throws -> Int
   func cpuTemperature() throws -> Double
   func cpuTemperature(source: CPUTemperatureSource) throws -> Double
+  func cpuHotspotReading() throws -> TemperatureReading
+  func batteryTemperatureReading() throws -> TemperatureReading
+  func allTemperatureReadings() -> [TemperatureReading]
+  func powerReading() -> PowerReading?
+  func batteryChargeLimitState() -> BatteryChargeLimitState
+  func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws
   func fanActualRPM(fan index: Int) throws -> Double
+  func fanTargetRPM(fan index: Int) throws -> Double
   func fanMinimumRPM(fan index: Int) throws -> Double
   func fanMaximumRPM(fan index: Int) throws -> Double
   func fanMode(fan index: Int) throws -> UInt8
@@ -30,19 +166,36 @@ extension FanHardware {
   public func cpuTemperature(source: CPUTemperatureSource) throws -> Double {
     try cpuTemperature()
   }
+
+  public func allTemperatureReadings() -> [TemperatureReading] { [] }
+
+  public func powerReading() -> PowerReading? { nil }
+  public func batteryChargeLimitState() -> BatteryChargeLimitState { .unsupported }
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    throw SMCClient.SMCError.keyUnavailable("bfF0")
+  }
+
+  public func fanTargetRPM(fan index: Int) throws -> Double {
+    try fanActualRPM(fan: index)
+  }
+
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    TemperatureReading(key: "CPU hotspot", value: try cpuTemperature(source: .hotspot))
+  }
+
+  public func batteryTemperatureReading() throws -> TemperatureReading {
+    guard
+      let reading =
+        (allTemperatureReadings()
+          .filter { $0.key.hasPrefix("TB") && $0.value.isFinite && (10...80).contains($0.value) }
+          .max(by: { $0.value < $1.value }))
+    else { throw SMCClient.SMCError.noTemperatureKey }
+    return reading
+  }
+
 }
 
 public final class SMCClient: FanHardware, @unchecked Sendable {
-  public struct TemperatureReading: Sendable, Equatable {
-    public let key: String
-    public let value: Double
-
-    public init(key: String, value: Double) {
-      self.key = key
-      self.value = value
-    }
-  }
-
   public enum SMCError: LocalizedError, Equatable {
     case serviceNotFound
     case connectionFailed(kern_return_t)
@@ -143,46 +296,51 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   private let writeKeyCommand: UInt8 = 6
   private let readIndexCommand: UInt8 = 8
   private let getKeyInfoCommand: UInt8 = 9
+  private let stateLock = NSRecursiveLock()
   private var connection: io_connect_t = 0
   private var modeKeyFormat: String?
   private var hasForceTestKey = false
   private var cachedKeys: [String]?
 
-  public var isOpen: Bool { connection != 0 }
+  public var isOpen: Bool { synchronized { connection != 0 } }
 
   public init() {}
 
   deinit { close() }
 
   public func open() throws {
-    guard connection == 0 else { return }
-    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-    guard service != 0 else { throw SMCError.serviceNotFound }
-    defer { IOObjectRelease(service) }
+    try synchronized {
+      guard connection == 0 else { return }
+      let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
+      guard service != 0 else { throw SMCError.serviceNotFound }
+      defer { IOObjectRelease(service) }
 
-    var newConnection: io_connect_t = 0
-    let result = IOServiceOpen(service, fanbar_mach_task_self(), 0, &newConnection)
-    guard result == kIOReturnSuccess else { throw SMCError.connectionFailed(result) }
-    connection = newConnection
+      var newConnection: io_connect_t = 0
+      let result = IOServiceOpen(service, fanbar_mach_task_self(), 0, &newConnection)
+      guard result == kIOReturnSuccess else { throw SMCError.connectionFailed(result) }
+      connection = newConnection
 
-    modeKeyFormat = ["F%dmd", "F%dMd"].first { format in
-      (try? readKey(String(format: format, 0))) != nil
+      modeKeyFormat = ["F%dmd", "F%dMd"].first { format in
+        (try? readKey(String(format: format, 0))) != nil
+      }
+      hasForceTestKey = (try? readKey("Ftst")) != nil
     }
-    hasForceTestKey = (try? readKey("Ftst")) != nil
   }
 
   public func close() {
-    guard connection != 0 else { return }
-    IOServiceClose(connection)
-    connection = 0
-    modeKeyFormat = nil
-    hasForceTestKey = false
-    cachedKeys = nil
+    synchronized {
+      guard connection != 0 else { return }
+      IOServiceClose(connection)
+      connection = 0
+      modeKeyFormat = nil
+      hasForceTestKey = false
+      cachedKeys = nil
+    }
   }
 
   public func fanCount() throws -> Int {
     let count = Int(try readUInt8("FNum"))
-    guard (1...8).contains(count) else { throw SMCError.noFans }
+    guard (0...8).contains(count) else { throw SMCError.noFans }
     return count
   }
 
@@ -204,7 +362,9 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       }
       value = Self.robustAverage(
         keys.compactMap { key in
-          guard let reading = try? readNumeric(key), (15...115).contains(reading) else { return nil }
+          guard let reading = try? readNumeric(key), (15...115).contains(reading) else {
+            return nil
+          }
           return reading
         })
     }
@@ -212,6 +372,84 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       throw SMCError.noTemperatureKey
     }
     return value
+  }
+
+  public func cpuHotspotReading() throws -> TemperatureReading {
+    guard let reading = firstValidTemperatureReading(["TCMz", "TCMb"]) else {
+      throw SMCError.noTemperatureKey
+    }
+    return reading
+  }
+
+  public func batteryTemperatureReading() throws -> TemperatureReading {
+    let discoveredKeys =
+      (try? allKeys())?.filter {
+        $0.count == 4 && $0.hasPrefix("TB") && $0.last == "T"
+      } ?? []
+    let keys = discoveredKeys.isEmpty ? ["TB0T", "TB1T", "TB2T"] : discoveredKeys
+    guard
+      let reading = keys.compactMap({ key -> TemperatureReading? in
+        guard let value = try? readNumeric(key), value.isFinite, (10...80).contains(value) else {
+          return nil
+        }
+        return TemperatureReading(key: key, value: value)
+      }).max(by: { $0.value < $1.value })
+    else { throw SMCError.noTemperatureKey }
+    return reading
+  }
+
+  public func batteryChargeLimitState() -> BatteryChargeLimitState {
+    (try? batteryChargeLimitStateOrThrow()) ?? .unsupported
+  }
+
+  public func batteryChargeLimitStateOrThrow() throws -> BatteryChargeLimitState {
+    let activation = try readKey("bfF0")
+    guard activation.bytes.count == 1 else { throw SMCError.invalidValue("bfF0") }
+    let lower = try readFirmwarePercent("bfE0")
+    let upper = try readFirmwarePercent("bfD0")
+    return BatteryChargeLimitState(
+      isSupported: true, isEnabled: activation.bytes[0] == 0x02,
+      lowerPercent: lower, upperPercent: upper)
+  }
+
+  public func batteryChargeControlKeyNames() -> [String] {
+    (try? allKeys().filter {
+      ["bfF0", "bfD0", "bfE0", "CHTE", "CH0B", "CH0C", "BCLM"].contains($0)
+    }) ?? []
+  }
+
+  public func batteryChargeControlDiagnostics() -> [String] {
+    ["bfF0", "bfD0", "bfE0", "CHTE", "CH0B", "CH0C", "BCLM"].map { key in
+      do {
+        let value = try readKey(key)
+        return "\(key):\(value.type):\(value.bytes.map { String(format: "%02x", $0) }.joined())"
+      } catch {
+        return "\(key):unavailable"
+      }
+    }
+  }
+
+  public func setBatteryChargeLimit(enabled: Bool, upperPercent: Int) throws {
+    _ = try batteryChargeLimitStateOrThrow()
+    if !enabled {
+      try writeKey("bfF0", bytes: [0x00])
+      return
+    }
+    guard (80...100).contains(upperPercent) else { throw SMCError.invalidValue("bfD0") }
+    let lowerPercent = max(75, upperPercent - 5)
+    // Firmware requires deactivation before updating both hysteresis bounds.
+    try writeKey("bfF0", bytes: [0x00])
+    try writeFirmwarePercent("bfD0", value: upperPercent)
+    try writeFirmwarePercent("bfE0", value: lowerPercent)
+    try writeKey("bfF0", bytes: [0x02])
+    let verified = try batteryChargeLimitStateOrThrow()
+    guard verified.isEnabled, verified.upperPercent == upperPercent,
+      verified.lowerPercent == lowerPercent
+    else {
+      throw SMCError.verificationFailed(
+        "battery charge limit", expected: Double(upperPercent),
+        actual: Double(verified.upperPercent ?? -1))
+    }
   }
 
   public static func robustAverage(_ values: [Double]) -> Double? {
@@ -246,12 +484,40 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     }
   }
 
+  public func powerReading() -> PowerReading? {
+    let service = IOServiceGetMatchingService(
+      kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+    guard service != 0 else { return nil }
+    defer { IOObjectRelease(service) }
+
+    guard
+      let connected = IORegistryEntryCreateCFProperty(
+        service, "ExternalConnected" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+    else { return nil }
+    var values: [String: Any] = ["ExternalConnected": connected]
+    for key in [
+      "IsCharging", "FullyCharged", "CurrentCapacity", "MaxCapacity", "Voltage", "Amperage",
+      "AdapterDetails", "PowerDistribution", "PowerTelemetryData",
+    ] {
+      if let value = IORegistryEntryCreateCFProperty(
+        service, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+      {
+        values[key] = value
+      }
+    }
+    return PowerTelemetryParser.parse(properties: values)
+  }
+
   private func firstValidTemperature(_ keys: [String]) -> Double? {
-    keys.lazy.compactMap { key -> Double? in
+    firstValidTemperatureReading(keys)?.value
+  }
+
+  private func firstValidTemperatureReading(_ keys: [String]) -> TemperatureReading? {
+    keys.lazy.compactMap { key -> TemperatureReading? in
       guard let value = try? self.readNumeric(key), value.isFinite, (0...125).contains(value) else {
         return nil
       }
-      return value
+      return TemperatureReading(key: key, value: value)
     }.first
   }
 
@@ -265,29 +531,31 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   public func setManualMode(fan index: Int) throws {
-    let key = modeKey(fan: index)
-    do {
-      try writeUInt8(key, value: 1)
-      guard try fanMode(fan: index) == 1 else { throw SMCError.manualModeTimeout(index) }
-      return
-    } catch {
-      guard hasForceTestKey else { throw error }
-    }
-
-    try writeUInt8("Ftst", value: 1)
-    Thread.sleep(forTimeInterval: 0.5)
-    let deadline = Date().addingTimeInterval(15)
-    repeat {
+    try synchronized {
+      let key = modeKey(fan: index)
       do {
         try writeUInt8(key, value: 1)
-        if try fanMode(fan: index) == 1 { return }
+        guard try fanMode(fan: index) == 1 else { throw SMCError.manualModeTimeout(index) }
+        return
       } catch {
-        // thermalmonitord may reject mode writes until it yields control.
+        guard hasForceTestKey else { throw error }
       }
-      Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
 
-    throw SMCError.manualModeTimeout(index)
+      try writeUInt8("Ftst", value: 1)
+      Thread.sleep(forTimeInterval: 0.5)
+      let deadline = Date().addingTimeInterval(15)
+      repeat {
+        do {
+          try writeUInt8(key, value: 1)
+          if try fanMode(fan: index) == 1 { return }
+        } catch {
+          // thermalmonitord may reject mode writes until it yields control.
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+      } while Date() < deadline
+
+      throw SMCError.manualModeTimeout(index)
+    }
   }
 
   public func setTargetRPM(_ rpm: Double, fan index: Int) throws {
@@ -304,69 +572,75 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   public func setAutomaticMode(fan index: Int) throws {
-    let key = modeKey(fan: index)
-    let currentMode = try fanMode(fan: index)
-    guard currentMode != 0, currentMode != 3 else { return }
-    do {
-      try writeUInt8(key, value: 0)
-    } catch {
-      guard hasForceTestKey else { throw error }
-      // Recovery for a crashed/interrupted session where the fan remained in
-      // manual mode after Ftst had already returned to zero.
-      try writeUInt8("Ftst", value: 1)
-      Thread.sleep(forTimeInterval: 0.5)
-      // If firmware continues rejecting the mode transition, never leave a
-      // stranded manual fan with a stale low target while system ownership is
-      // being reclaimed.
-      if let maximum = try? fanMaximumRPM(fan: index) {
-        try? writeNumeric("F\(index)Tg", value: maximum)
-      }
-      let unlockDeadline = Date().addingTimeInterval(15)
-      var wroteAutomatic = false
-      repeat {
-        do {
-          try writeUInt8(key, value: 0)
-          wroteAutomatic = true
-          break
-        } catch {
-          Thread.sleep(forTimeInterval: 0.1)
+    try synchronized {
+      let key = modeKey(fan: index)
+      let currentMode = try fanMode(fan: index)
+      guard currentMode != 0, currentMode != 3 else { return }
+      do {
+        try writeUInt8(key, value: 0)
+      } catch {
+        guard hasForceTestKey else { throw error }
+        // Recovery for a crashed/interrupted session where the fan remained in
+        // manual mode after Ftst had already returned to zero.
+        try writeUInt8("Ftst", value: 1)
+        Thread.sleep(forTimeInterval: 0.5)
+        // If firmware continues rejecting the mode transition, never leave a
+        // stranded manual fan with a stale low target while system ownership is
+        // being reclaimed.
+        if let maximum = try? fanMaximumRPM(fan: index) {
+          try? writeNumeric("F\(index)Tg", value: maximum)
         }
-      } while Date() < unlockDeadline
-      // Some Apple Silicon firmware rejects F?Md=0 but still returns control
-      // after Ftst is cleared. The caller clears Ftst after processing all fans.
-      if !wroteAutomatic { return }
-    }
+        let unlockDeadline = Date().addingTimeInterval(15)
+        var wroteAutomatic = false
+        repeat {
+          do {
+            try writeUInt8(key, value: 0)
+            wroteAutomatic = true
+            break
+          } catch {
+            Thread.sleep(forTimeInterval: 0.1)
+          }
+        } while Date() < unlockDeadline
+        // Some Apple Silicon firmware rejects F?Md=0 but still returns control
+        // after Ftst is cleared. The caller clears Ftst after processing all fans.
+        if !wroteAutomatic { return }
+      }
 
-    let deadline = Date().addingTimeInterval(6)
-    var mode = try fanMode(fan: index)
-    while mode != 0, mode != 3, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.1)
-      mode = try fanMode(fan: index)
-    }
-    guard mode == 0 || mode == 3 else {
-      throw SMCError.verificationFailed(key, expected: 0, actual: Double(mode))
+      let deadline = Date().addingTimeInterval(6)
+      var mode = try fanMode(fan: index)
+      while mode != 0, mode != 3, Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.1)
+        mode = try fanMode(fan: index)
+      }
+      guard mode == 0 || mode == 3 else {
+        throw SMCError.verificationFailed(key, expected: 0, actual: Double(mode))
+      }
     }
   }
 
   public func controlOverrideActive() throws -> Bool {
-    guard hasForceTestKey else { return false }
-    return try readUInt8("Ftst") != 0
+    try synchronized {
+      guard hasForceTestKey else { return false }
+      return try readUInt8("Ftst") != 0
+    }
   }
 
   public func resetControlOverride() throws {
-    guard try controlOverrideActive() else { return }
-    try writeUInt8("Ftst", value: 0)
-    let deadline = Date().addingTimeInterval(6)
-    while try controlOverrideActive(), Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.2)
-    }
-    guard try !controlOverrideActive() else {
-      throw SMCError.verificationFailed("Ftst", expected: 0, actual: 1)
+    try synchronized {
+      guard try controlOverrideActive() else { return }
+      try writeUInt8("Ftst", value: 0)
+      let deadline = Date().addingTimeInterval(6)
+      while try controlOverrideActive(), Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.2)
+      }
+      guard try !controlOverrideActive() else {
+        throw SMCError.verificationFailed("Ftst", expected: 0, actual: 1)
+      }
     }
   }
 
   private func modeKey(fan index: Int) -> String {
-    String(format: modeKeyFormat ?? "F%dMd", index)
+    synchronized { String(format: modeKeyFormat ?? "F%dMd", index) }
   }
 
   private func readRPM(_ key: String) throws -> Double {
@@ -392,6 +666,10 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
       return Double(data.bytes[0])
     case "ui16" where data.bytes.count >= 2:
       return Double(UInt16(data.bytes[0]) << 8 | UInt16(data.bytes[1]))
+    case "ui32" where data.bytes.count >= 4:
+      return Double(
+        UInt32(data.bytes[0]) << 24 | UInt32(data.bytes[1]) << 16
+          | UInt32(data.bytes[2]) << 8 | UInt32(data.bytes[3]))
     default:
       throw SMCError.keyUnavailable(key)
     }
@@ -401,6 +679,29 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
     let data = try readKey(key)
     guard let first = data.bytes.first else { throw SMCError.keyUnavailable(key) }
     return first
+  }
+
+  private func readFirmwarePercent(_ key: String) throws -> Int {
+    let data = try readKey(key)
+    guard data.type == "ui32", data.bytes.count == 4 else {
+      throw SMCError.keyUnavailable(key)
+    }
+    // macOS 27 firmware charge-limit keys are exceptional little-endian ui32 values.
+    let value =
+      UInt32(data.bytes[0]) | UInt32(data.bytes[1]) << 8
+      | UInt32(data.bytes[2]) << 16 | UInt32(data.bytes[3]) << 24
+    guard value <= 100 else { throw SMCError.invalidValue(key) }
+    return Int(value)
+  }
+
+  private func writeFirmwarePercent(_ key: String, value: Int) throws {
+    guard (0...100).contains(value) else { throw SMCError.invalidValue(key) }
+    let raw = UInt32(value)
+    try writeKey(
+      key,
+      bytes: [
+        UInt8(raw & 0xff), UInt8((raw >> 8) & 0xff), UInt8((raw >> 16) & 0xff), UInt8(raw >> 24),
+      ])
   }
 
   private func writeUInt8(_ key: String, value: UInt8) throws {
@@ -447,26 +748,28 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   private func allKeys() throws -> [String] {
-    if let cachedKeys { return cachedKeys }
-    let countData = try readKey("#KEY")
-    guard countData.bytes.count >= 4 else { throw SMCError.invalidValue("#KEY") }
-    let count =
-      UInt32(countData.bytes[0]) << 24 | UInt32(countData.bytes[1]) << 16
-      | UInt32(countData.bytes[2]) << 8 | UInt32(countData.bytes[3])
-    guard (1...20_000).contains(count) else { throw SMCError.invalidValue("#KEY") }
+    try synchronized {
+      if let cachedKeys { return cachedKeys }
+      let countData = try readKey("#KEY")
+      guard countData.bytes.count >= 4 else { throw SMCError.invalidValue("#KEY") }
+      let count =
+        UInt32(countData.bytes[0]) << 24 | UInt32(countData.bytes[1]) << 16
+        | UInt32(countData.bytes[2]) << 8 | UInt32(countData.bytes[3])
+      guard (1...20_000).contains(count) else { throw SMCError.invalidValue("#KEY") }
 
-    var keys: [String] = []
-    keys.reserveCapacity(Int(count))
-    for index in 0..<count {
-      var input = SMCKeyData()
-      input.data8 = readIndexCommand
-      input.data32 = index
-      let output = try call("index \(index)", input: input)
-      let key = fourCharString(output.key)
-      if key.utf8.count == 4 { keys.append(key) }
+      var keys: [String] = []
+      keys.reserveCapacity(Int(count))
+      for index in 0..<count {
+        var input = SMCKeyData()
+        input.data8 = readIndexCommand
+        input.data32 = index
+        let output = try call("index \(index)", input: input)
+        let key = fourCharString(output.key)
+        if key.utf8.count == 4 { keys.append(key) }
+      }
+      cachedKeys = keys
+      return keys
     }
-    cachedKeys = keys
-    return keys
   }
 
   private func writeKey(_ key: String, bytes: [UInt8], knownInfo: (type: String, size: Int)? = nil)
@@ -483,18 +786,26 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   private func call(_ key: String, input: SMCKeyData) throws -> SMCKeyData {
-    guard connection != 0 else { throw SMCError.notOpen }
-    precondition(MemoryLayout<SMCKeyData>.stride == 80, "AppleSMC ABI layout changed")
-    var input = input
-    var output = SMCKeyData()
-    var outputSize = MemoryLayout<SMCKeyData>.stride
-    let result = IOConnectCallStructMethod(
-      connection, handleYPCEvent, &input, MemoryLayout<SMCKeyData>.stride, &output, &outputSize
-    )
-    guard result == kIOReturnSuccess else { throw SMCError.callFailed(key, result) }
-    guard outputSize >= 44 else { throw SMCError.invalidValue(key) }
-    guard output.result == 0 else { throw SMCError.firmwareError(key, output.result) }
-    return output
+    try synchronized {
+      guard connection != 0 else { throw SMCError.notOpen }
+      precondition(MemoryLayout<SMCKeyData>.stride == 80, "AppleSMC ABI layout changed")
+      var input = input
+      var output = SMCKeyData()
+      var outputSize = MemoryLayout<SMCKeyData>.stride
+      let result = IOConnectCallStructMethod(
+        connection, handleYPCEvent, &input, MemoryLayout<SMCKeyData>.stride, &output, &outputSize
+      )
+      guard result == kIOReturnSuccess else { throw SMCError.callFailed(key, result) }
+      guard outputSize >= 44 else { throw SMCError.invalidValue(key) }
+      guard output.result == 0 else { throw SMCError.firmwareError(key, output.result) }
+      return output
+    }
+  }
+
+  private func synchronized<T>(_ body: () throws -> T) rethrows -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return try body()
   }
 
   private func fourCharCode(_ string: String) throws -> UInt32 {

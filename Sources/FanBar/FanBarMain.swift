@@ -16,24 +16,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    removeLegacyFanLearningHistory()
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     if let button = statusItem.button {
-      button.image = NSImage(systemSymbolName: "fan", accessibilityDescription: "FanBar")
       button.action = #selector(togglePopover)
       button.target = self
     }
     statusObserver = controller.objectWillChange.sink { [weak self] in
-      DispatchQueue.main.async { self?.updateStatusItem() }
+      DispatchQueue.main.async {
+        self?.updateStatusItem()
+        self?.updatePopoverSize()
+      }
     }
     updateStatusItem()
 
     popover.behavior = .transient
-    popover.contentSize = NSSize(width: 460, height: 590)
+    popover.contentSize = NSSize(width: 520, height: desiredPopoverHeight)
     popover.contentViewController = NSHostingController(
       rootView: FanPopoverView(controller: controller))
 
-    controller.helperManager.enableIfNeeded()
     controller.start()
     sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
@@ -47,8 +49,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
+  private func removeLegacyFanLearningHistory() {
+    guard
+      let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      ).first
+    else { return }
+    let history =
+      applicationSupport
+      .appendingPathComponent("FanBar", isDirectory: true)
+      .appendingPathComponent("macOS-fan-history-v1.json")
+    try? FileManager.default.removeItem(at: history)
+  }
+
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    guard !isTerminating else { return .terminateNow }
+    // A second quit request must not bypass an in-flight safety restore.
+    // AppKit will terminate after the first restore task replies below.
+    guard !isTerminating else { return .terminateLater }
     isTerminating = true
     Task { @MainActor in
       let restored = await controller.shutdown()
@@ -58,26 +75,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return .terminateLater
   }
 
+  func applicationShouldHandleReopen(
+    _ sender: NSApplication, hasVisibleWindows flag: Bool
+  ) -> Bool {
+    if !popover.isShown { showPopover() }
+    return true
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
     if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
     if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
   }
 
   @objc private func togglePopover() {
-    guard let button = statusItem.button else { return }
+    guard statusItem.button != nil else { return }
     if popover.isShown {
       popover.performClose(nil)
     } else {
-      popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-      popover.contentViewController?.view.window?.makeKey()
+      showPopover()
     }
+  }
+
+  private func showPopover() {
+    guard let button = statusItem?.button else { return }
+    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    popover.contentViewController?.view.window?.makeKey()
   }
 
   private func updateStatusItem() {
     guard let button = statusItem?.button else { return }
-    button.title = controller.menuBarText
-    button.imagePosition = controller.menuBarText.isEmpty ? .imageOnly : .imageLeading
-    button.toolTip = "FanBar · CPU \(controller.temperatureText) · \(controller.fanText)"
+    let description = controller.menuBarAccessibilityDescription
+    button.image = primaryMenuBarImage(accessibilityDescription: description)
+    let attributedTitle = NSMutableAttributedString()
+    func appendLabelText(_ text: String) {
+      guard !text.isEmpty else { return }
+      attributedTitle.append(
+        NSAttributedString(
+          string: text,
+          attributes: [.foregroundColor: NSColor.labelColor]))
+    }
+    if controller.showsBatteryAccessoryMenuBarIcon {
+      appendLabelText(controller.menuBarNonBatteryText)
+      if attributedTitle.length > 0 {
+        attributedTitle.append(NSAttributedString(string: "   "))
+      }
+      let attachment = NSTextAttachment()
+      let accessory = BatteryMenuBarImageRenderer.image(
+        style: controller.batteryMenuBarStyle,
+        power: controller.currentPower,
+        accessibilityDescription: "电池状态")
+      attachment.image = accessory
+      let width: CGFloat =
+        switch controller.batteryMenuBarStyle {
+        case .macOSColored: 30
+        case .iOSNative: 31
+        case .fanBarStatus, .macOSNative: 19
+        }
+      attachment.bounds = NSRect(x: 0, y: -2, width: width, height: 14)
+      attributedTitle.append(NSAttributedString(attachment: attachment))
+      if !controller.menuBarBatteryText.isEmpty {
+        attributedTitle.append(NSAttributedString(string: " "))
+        appendLabelText(controller.menuBarBatteryText)
+      }
+    } else {
+      appendLabelText(controller.menuBarText)
+    }
+    if let alert = controller.menuBarHotspotAlertText {
+      if attributedTitle.length > 0 { attributedTitle.append(NSAttributedString(string: "  ")) }
+      attributedTitle.append(
+        NSAttributedString(
+          string: alert,
+          attributes: [.foregroundColor: NSColor.systemRed]))
+    }
+    if let alert = controller.menuBarBatteryAlertText {
+      if attributedTitle.length > 0 { attributedTitle.append(NSAttributedString(string: "  ")) }
+      attributedTitle.append(
+        NSAttributedString(
+          string: alert,
+          attributes: [.foregroundColor: NSColor.systemOrange]))
+    }
+    button.attributedTitle = attributedTitle
+    button.imagePosition = attributedTitle.length == 0 ? .imageOnly : .imageLeading
+    let fanDetails = controller.hasControllableFans ? " · \(controller.fanText)" : ""
+    button.toolTip =
+      "FanBar · CPU \(controller.temperatureText) · 电池区域 \(controller.batteryTemperatureText)\(fanDetails)"
+      + (controller.menuBarHotspotAlertText.map { " · \($0)" } ?? "")
+      + (controller.menuBarBatteryAlertText.map { " · \($0)" } ?? "")
+  }
+
+  private func primaryMenuBarImage(accessibilityDescription: String) -> NSImage? {
+    if controller.usesBatteryAsPrimaryMenuBarIcon {
+      return BatteryMenuBarImageRenderer.image(
+        style: controller.batteryMenuBarStyle,
+        power: controller.currentPower,
+        accessibilityDescription: accessibilityDescription)
+    }
+    let image =
+      NSImage(
+        systemSymbolName: controller.menuBarSymbolName,
+        accessibilityDescription: accessibilityDescription)
+      ?? NSImage(
+        systemSymbolName: "thermometer.medium",
+        accessibilityDescription: accessibilityDescription)
+    image?.isTemplate = true
+    return image
+  }
+
+  private func updatePopoverSize() {
+    let desiredSize = NSSize(width: 520, height: desiredPopoverHeight)
+    guard popover.contentSize != desiredSize else { return }
+    popover.contentSize = desiredSize
+  }
+
+  private var desiredPopoverHeight: Double {
+    let visibleScreenHeight = statusItem?.button?.window?.screen.map {
+      Double($0.visibleFrame.height)
+    }
+    return PopoverSizing.height(
+      preferred: controller.preferredPopoverHeight,
+      visibleScreenHeight: visibleScreenHeight)
   }
 }
 
@@ -127,6 +243,18 @@ struct FanBarMain {
         print("helper=ready")
       } catch {
         print("helper-error=\(error.localizedDescription)")
+        exit(EXIT_FAILURE)
+      }
+      return true
+    }
+    if arguments.contains("--charge-limit-status") {
+      do {
+        let state = try PrivilegedFanClient().batteryChargeLimitState()
+        print(
+          "supported=\(state.isSupported) enabled=\(state.isEnabled) lower=\(state.lowerPercent.map(String.init) ?? "--") upper=\(state.upperPercent.map(String.init) ?? "--")"
+        )
+      } catch {
+        print("charge-limit-error=\(error.localizedDescription)")
         exit(EXIT_FAILURE)
       }
       return true
@@ -194,6 +322,22 @@ struct FanBarMain {
       defer { smc.close() }
       let count = try smc.fanCount()
       print("temperature=\(try smc.cpuTemperature()) fans=\(count)")
+      if let power = smc.powerReading() {
+        let input =
+          power.inputCapacityWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        let system = power.systemPowerWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        let charging =
+          power.batteryChargingPowerWatts.map { String(format: "%.3f", $0) } ?? "unavailable"
+        print(
+          "power.external=\(power.isExternalPowerConnected) charging=\(power.isBatteryCharging) input=\(input)W system=\(system)W battery=\(charging)W"
+        )
+      }
+      let chargeLimit = smc.batteryChargeLimitState()
+      print(
+        "battery.charge-limit supported=\(chargeLimit.isSupported) enabled=\(chargeLimit.isEnabled) lower=\(chargeLimit.lowerPercent.map(String.init) ?? "--") upper=\(chargeLimit.upperPercent.map(String.init) ?? "--")"
+      )
+      print("battery.charge-keys=\(smc.batteryChargeControlKeyNames().joined(separator: ","))")
+      print("battery.charge-values=\(smc.batteryChargeControlDiagnostics().joined(separator: ","))")
       for fan in 0..<count {
         print(
           "fan=\(fan) mode=\(try smc.fanMode(fan: fan)) actual=\(try smc.fanActualRPM(fan: fan)) target=\(try smc.fanTargetRPM(fan: fan)) min=\(try smc.fanMinimumRPM(fan: fan)) max=\(try smc.fanMaximumRPM(fan: fan))"
@@ -211,7 +355,12 @@ struct FanBarMain {
       try smc.open()
       defer { smc.close() }
       for source in CPUTemperatureSource.allCases {
-        print("source.\(source.rawValue)=\(String(format: "%.3f", try smc.cpuTemperature(source: source)))")
+        print(
+          "source.\(source.rawValue)=\(String(format: "%.3f", try smc.cpuTemperature(source: source)))"
+        )
+      }
+      if let battery = try? smc.batteryTemperatureReading() {
+        print("source.battery=\(battery.key):\(String(format: "%.3f", battery.value))")
       }
       let readings = smc.temperatureReadings()
       for reading in readings {

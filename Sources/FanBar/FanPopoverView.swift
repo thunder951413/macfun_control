@@ -1,13 +1,15 @@
-import SwiftUI
 import FanBarHardware
+import SwiftUI
 
 struct FanPopoverView: View {
   @ObservedObject var controller: FanController
   @ObservedObject private var helperManager: PrivilegedHelperManager
+  @ObservedObject private var launchAtLoginManager: LaunchAtLoginManager
 
   init(controller: FanController) {
     self.controller = controller
     helperManager = controller.helperManager
+    launchAtLoginManager = controller.launchAtLoginManager
   }
 
   private var stateColor: Color {
@@ -20,21 +22,76 @@ struct FanPopoverView: View {
   }
 
   var body: some View {
+    VStack(spacing: 0) {
+      header
+        .padding(.horizontal, 20)
+        .padding(.top, 17)
+        .padding(.bottom, 12)
+      Divider()
+      TabView(
+        selection: Binding(
+          get: { controller.selectedPopoverTab },
+          set: { controller.setPopoverTab($0) }
+        )
+      ) {
+        sensorTab
+          .tag(PopoverTab.sensors)
+          .tabItem { Label("传感器", systemImage: "thermometer.medium") }
+        batteryTab
+          .tag(PopoverTab.battery)
+          .tabItem { Label("电池", systemImage: "battery.75percent") }
+        fanTab
+          .tag(PopoverTab.fan)
+          .tabItem { Label("风扇", systemImage: "fan") }
+      }
+    }
+    .frame(width: 520, height: controller.preferredPopoverHeight)
+    .onAppear {
+      helperManager.refresh()
+      launchAtLoginManager.refresh()
+    }
+  }
+
+  private var sensorTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        header
-        metrics
-        Divider()
-        menuBarSettings
-        Divider()
-        controls
-        curvePreview
-        Divider()
-        safetyNote
+        temperatureOverview
+        sensorTemperatures
+        sensorSettings
       }
-      .padding(18)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
     }
-    .frame(width: 460, height: 590)
+  }
+
+  private var batteryTab: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        powerMetrics
+        chargeLimitSettings
+        batterySettings
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
+    }
+  }
+
+  private var fanTab: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
+        if controller.isFanless {
+          fanlessMonitorNotice
+          fanlessSettingsNotice
+        } else {
+          metrics
+          controls
+          curvePreview
+          safetyNote
+        }
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
+    }
   }
 
   private var header: some View {
@@ -63,46 +120,164 @@ struct FanPopoverView: View {
   }
 
   private var metrics: some View {
-    VStack(spacing: 9) {
-      HStack {
-        Label(
-          "CPU \(controller.temperatureSource.shortLabel) \(controller.temperatureText)",
-          systemImage: "thermometer.medium")
-        Spacer()
-        Label(controller.fanText, systemImage: "fan")
-      }
-      HStack {
-        Text("目标转速").foregroundStyle(.secondary)
-        Spacer()
-        Text(controller.targetText)
-          .monospacedDigit()
+    HStack(spacing: 12) {
+      Image(systemName: "fan")
+        .font(.title3)
+        .foregroundStyle(controller.state == .manual ? .orange : .secondary)
+        .frame(width: 32, height: 32)
+        .background(.quaternary.opacity(0.5), in: Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text("风扇状态").fontWeight(.medium)
+        Text("目标转速 · \(controller.targetText)")
+          .font(.caption)
           .foregroundStyle(controller.state == .manual ? .orange : .secondary)
       }
-      .font(.caption)
+      Spacer(minLength: 12)
+      Text(controller.fanText)
+        .font(.system(.callout, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
     }
+    .padding(12)
+    .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
     .font(.callout)
   }
 
-  private var menuBarSettings: some View {
-    VStack(spacing: 10) {
-      HStack {
-        Label("菜单栏显示", systemImage: "menubar.rectangle")
-        Spacer()
-        Picker(
-          "菜单栏显示",
-          selection: Binding(
-            get: { controller.menuBarDisplayMode },
-            set: { controller.setMenuBarDisplayMode($0) }
-          )
-        ) {
-          ForEach(MenuBarDisplayMode.allCases) { mode in Text(mode.label).tag(mode) }
-        }
-        .labelsHidden()
-        .frame(width: 160)
+  private var fanlessMonitorNotice: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "thermometer.medium")
+        .font(.title3)
+        .foregroundStyle(.blue)
+        .frame(width: 32, height: 32)
+        .background(.blue.opacity(0.1), in: Circle())
+      VStack(alignment: .leading, spacing: 3) {
+        Text("无风扇设备").fontWeight(.medium)
+        Text("FanBar 仅监控温度并提供高温提醒")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
-      HStack {
-        Label("温度来源", systemImage: "cpu")
+      Spacer()
+    }
+    .padding(12)
+    .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
+  }
+
+  private var temperatureOverview: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(alignment: .firstTextBaseline) {
+        Label("主要温度", systemImage: "thermometer.medium")
+          .font(.callout).fontWeight(.medium)
         Spacer()
+        Text("控制依据：\(controller.temperatureSource.shortLabel)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+      }
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8
+      ) {
+        TemperatureMetricCard(
+          title: "CPU 封装", value: dashboardValue(.package),
+          isControlSource: controller.temperatureSource == .package)
+        TemperatureMetricCard(
+          title: "核心平均", value: dashboardValue(.coreAverage),
+          isControlSource: controller.temperatureSource == .coreAverage)
+        TemperatureMetricCard(
+          title: "最高热点", value: dashboardValue(.hotspot),
+          isControlSource: controller.temperatureSource == .hotspot)
+      }
+    }
+  }
+
+  private var powerMetrics: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label("电源与功耗", systemImage: "bolt.fill")
+        .font(.callout).fontWeight(.medium)
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8
+      ) {
+        PowerMetricCard(
+          title: "电池状态",
+          value: controller.batteryLevelText,
+          subtitle: controller.batteryStatusText,
+          symbol: BatteryStatusPresentation.symbolName(for: controller.currentPower),
+          color: controller.currentPower?.isBatteryCharging == true ? .green : .blue)
+        PowerMetricCard(
+          title: "电源输入能力",
+          value: controller.inputCapacityText,
+          subtitle: controller.currentPower?.isExternalPowerConnected == true
+            ? "当前充电器协商功率" : "当前未接入外部电源",
+          symbol: "powerplug.fill",
+          color: controller.currentPower?.isExternalPowerConnected == true ? .green : .secondary)
+        PowerMetricCard(
+          title: "设备当前功耗",
+          value: controller.systemPowerText,
+          subtitle: "系统实时负载",
+          symbol: "bolt.horizontal.fill",
+          color: .orange)
+        PowerMetricCard(
+          title: "电池充电功率",
+          value: controller.batteryChargingPowerText,
+          subtitle: controller.batteryChargingPowerSubtitle,
+          symbol: "battery.100percent.bolt",
+          color: controller.currentPower?.isBatteryCharging == true ? .green : .secondary)
+      }
+    }
+  }
+
+  private var sensorTemperatures: some View {
+    let groups = TemperatureSensorGroup.make(from: controller.temperatureDashboard.readings)
+    return VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Label("其他传感器", systemImage: "sensor.tag.radiowaves.forward")
+          .font(.callout).fontWeight(.medium)
+        Spacer()
+        Text("\(groups.flatMap(\.readings).count) 个有效读数")
+          .font(.caption2).foregroundStyle(.secondary)
+      }
+
+      if groups.isEmpty {
+        Text("正在读取 SMC 传感器…")
+          .font(.caption).foregroundStyle(.secondary)
+      } else {
+        LazyVGrid(
+          columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible())], spacing: 8
+        ) {
+          ForEach(groups) { group in
+            SensorGroupSummary(group: group)
+          }
+        }
+
+      }
+    }
+  }
+
+  private func dashboardValue(_ source: CPUTemperatureSource) -> Double? {
+    if let value = controller.temperatureDashboard.value(for: source) { return value }
+    if source == controller.temperatureSource { return controller.currentTemperature }
+    if source == .hotspot { return controller.currentHotspotTemperature }
+    return nil
+  }
+
+  private var sensorSettings: some View {
+    PopoverSection(title: "传感器设置", symbol: "thermometer.medium") {
+      SettingRow(
+        title: "在菜单栏显示", subtitle: "显示所选传感器的主要温度", symbol: "menubar.rectangle"
+      ) {
+        Toggle(
+          "在菜单栏显示传感器状态",
+          isOn: Binding(
+            get: { controller.showsSensorStatusInMenuBar },
+            set: { controller.setShowsSensorStatusInMenuBar($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+      }
+      SectionDivider()
+      SettingRow(
+        title: controller.isFanless ? "主要温度" : "控制温度",
+        subtitle: controller.isFanless ? "菜单栏与监控状态使用的来源" : "智能曲线采用的温度来源",
+        symbol: "cpu"
+      ) {
         Picker(
           "温度来源",
           selection: Binding(
@@ -113,45 +288,362 @@ struct FanPopoverView: View {
           ForEach(CPUTemperatureSource.allCases) { source in Text(source.label).tag(source) }
         }
         .labelsHidden()
-        .frame(width: 160)
+        .frame(width: 158)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "采样周期", subtitle: controller.samplingIntervalOption.detail,
+        symbol: "clock.arrow.circlepath"
+      ) {
+        Picker(
+          "采样周期",
+          selection: Binding(
+            get: { controller.samplingIntervalOption },
+            set: { controller.setSamplingIntervalOption($0) }
+          )
+        ) {
+          ForEach(SamplingIntervalOption.allCases) { option in
+            Text(option.label).tag(option)
+          }
+        }
+        .labelsHidden()
+        .frame(width: 158)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "高温热点提醒", subtitle: "超过 90°C 时在菜单栏以红色提示",
+        symbol: "thermometer.high"
+      ) {
+        Toggle(
+          "高温热点提醒",
+          isOn: Binding(
+            get: { controller.showsHotspotMenuAlert },
+            set: { controller.setShowsHotspotMenuAlert($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+        .accessibilityLabel("高温热点提醒")
+      }
+      SectionDivider()
+      SettingRow(
+        title: "开机启动", subtitle: launchAtLoginSubtitle, symbol: "power"
+      ) {
+        HStack(spacing: 8) {
+          if launchAtLoginManager.state == .approvalRequired {
+            Button("去批准") { launchAtLoginManager.openApprovalSettings() }
+              .controlSize(.mini)
+          }
+          Toggle(
+            "开机启动",
+            isOn: Binding(
+              get: { launchAtLoginManager.isEnabled },
+              set: { launchAtLoginManager.setEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("开机启动")
+          .disabled(launchAtLoginManager.state == .unavailable)
+        }
       }
     }
-    .font(.callout)
+  }
+
+  private var batterySettings: some View {
+    PopoverSection(title: "电池温度", symbol: "battery.75percent") {
+      SettingRow(
+        title: "在菜单栏显示", subtitle: "显示电量和充电、暂停状态", symbol: "menubar.rectangle"
+      ) {
+        Toggle(
+          "在菜单栏显示电池状态",
+          isOn: Binding(
+            get: { controller.showsBatteryStatusInMenuBar },
+            set: { controller.setShowsBatteryStatusInMenuBar($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+      }
+      SectionDivider()
+      SettingRow(
+        title: "电池显示样式", subtitle: controller.batteryMenuBarStyle.detail,
+        symbol: "paintpalette"
+      ) {
+        HStack(spacing: 7) {
+          BatteryMenuBarPreview(
+            style: controller.batteryMenuBarStyle,
+            power: controller.currentPower)
+          Picker(
+            "电池显示样式",
+            selection: Binding(
+              get: { controller.batteryMenuBarStyle },
+              set: { controller.setBatteryMenuBarStyle($0) }
+            )
+          ) {
+            ForEach(BatteryMenuBarStyle.allCases) { style in
+              Text(style.label).tag(style)
+            }
+          }
+          .labelsHidden()
+        }
+      }
+      .disabled(!controller.showsBatteryStatusInMenuBar)
+      SectionDivider()
+      SettingRow(
+        title: "显示内容",
+        subtitle: controller.batteryMenuBarStyle.embedsPercentage
+          ? "iOS 样式将电量数字嵌入图标" : "图标与电量百分比可独立显示",
+        symbol: "textformat.size"
+      ) {
+        HStack(spacing: 12) {
+          LabeledCompactToggle(
+            title: "图标",
+            isOn: Binding(
+              get: { controller.showsBatteryIconInMenuBar },
+              set: { controller.setShowsBatteryIconInMenuBar($0) }
+            )
+          )
+          .disabled(controller.batteryMenuBarStyle.embedsPercentage)
+          if controller.batteryMenuBarStyle.embedsPercentage {
+            Text("电量内嵌")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          } else {
+            LabeledCompactToggle(
+              title: "百分比",
+              isOn: Binding(
+                get: { controller.showsBatteryPercentageInMenuBar },
+                set: { controller.setShowsBatteryPercentageInMenuBar($0) }
+              )
+            )
+          }
+        }
+      }
+      .disabled(!controller.showsBatteryStatusInMenuBar)
+      SectionDivider()
+      SettingRow(
+        title: "当前区域最高温", subtitle: "三个电池区域传感器中的最高值", symbol: "sensor"
+      ) {
+        Text(controller.batteryTemperatureText)
+          .font(.system(.callout, design: .rounded).monospacedDigit())
+          .fontWeight(.semibold)
+      }
+      SectionDivider()
+      SettingRow(
+        title: "菜单栏高温提醒", subtitle: "超过阈值时显示电池图标和温度",
+        symbol: "exclamationmark.triangle"
+      ) {
+        Toggle(
+          "菜单栏高温提醒",
+          isOn: Binding(
+            get: { controller.showsBatteryMenuAlert },
+            set: { controller.setShowsBatteryMenuAlert($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+        .accessibilityLabel("菜单栏高温提醒")
+      }
+      SectionDivider()
+      SettingRow(
+        title: "提醒温度", subtitle: "可设置 30–50°C", symbol: "thermometer.medium"
+      ) {
+        BatteryTemperatureSlider(
+          value: Binding(
+            get: { controller.batteryAlertThreshold },
+            set: { controller.setBatteryAlertThreshold($0) }
+          ), range: BatteryTemperaturePreferences.alertRange)
+      }
+      .disabled(!controller.showsBatteryMenuAlert)
+      if !controller.isFanless {
+        SectionDivider()
+        SettingRow(
+          title: "影响风扇转速", subtitle: "与 CPU 曲线比较并采用较高目标", symbol: "fan"
+        ) {
+          Toggle(
+            "影响风扇转速",
+            isOn: Binding(
+              get: { controller.isBatteryCurveEnabled },
+              set: { controller.setBatteryCurveEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("电池温度影响风扇转速")
+        }
+        SectionDivider()
+        SettingRow(
+          title: "曲线介入温度", subtitle: "超过后线性加速，50°C 达到最大转速",
+          symbol: "chart.line.uptrend.xyaxis"
+        ) {
+          BatteryTemperatureSlider(
+            value: Binding(
+              get: { controller.batteryCurveThreshold },
+              set: { controller.setBatteryCurveThreshold($0) }
+            ), range: BatteryFanPolicy.thresholdRange)
+        }
+        .disabled(!controller.isBatteryCurveEnabled)
+      }
+    }
+  }
+
+  private var chargeLimitSettings: some View {
+    PopoverSection(title: "充电保护", symbol: "battery.100percent.bolt") {
+      SettingRow(
+        title: "电池充电上限", subtitle: controller.batteryChargeLimitSubtitle,
+        symbol: "shield.lefthalf.filled"
+      ) {
+        if controller.batteryChargeLimitState.isSupported {
+          Toggle(
+            "电池充电上限",
+            isOn: Binding(
+              get: { controller.batteryChargeLimitEnabled },
+              set: { controller.setBatteryChargeLimitEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+        } else {
+          Button("系统设置") { openBatterySettings() }
+            .controlSize(.mini)
+        }
+      }
+      SectionDivider()
+      SettingRow(
+        title: "上限电量", subtitle: "使用 macOS 固件级限制；低 5% 后恢复充电",
+        symbol: "gauge.with.dots.needle.50percent"
+      ) {
+        Picker(
+          "上限电量",
+          selection: Binding(
+            get: { controller.batteryChargeLimitPercent },
+            set: { controller.setBatteryChargeLimitPercent($0) }
+          )
+        ) {
+          ForEach(Array(stride(from: 80, through: 100, by: 5)), id: \.self) { value in
+            Text("\(value)%").tag(value)
+          }
+        }
+        .labelsHidden()
+        .frame(width: 92)
+        .disabled(
+          !controller.batteryChargeLimitState.isSupported
+            || !controller.batteryChargeLimitEnabled)
+      }
+      Text("固件会在达到上限后暂停充电，并在低于恢复点后重新充电；系统可能偶尔充至 100% 以校准电量估算。")
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+  }
+
+  private func openBatterySettings() {
+    guard
+      let url = URL(
+        string: "x-apple.systempreferences:com.apple.preference.battery?BatteryHealth")
+    else { return }
+    NSWorkspace.shared.open(url)
+  }
+
+  private var fanlessSettingsNotice: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: "checkmark.shield")
+        .foregroundStyle(.green)
+        .frame(width: 18)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("已启用纯监控模式").fontWeight(.medium)
+        Text("未检测到可控风扇，因此风扇控制、转速显示和散热曲线已停用；温度监控与提醒保持可用。")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+  }
+
+  private var launchAtLoginSubtitle: String {
+    if let error = launchAtLoginManager.errorMessage { return "设置失败：\(error)" }
+    return switch launchAtLoginManager.state {
+    case .disabled: "登录 macOS 后自动运行 FanBar"
+    case .enabled: "已加入系统登录项"
+    case .approvalRequired: "请在系统设置中允许后台项目"
+    case .unavailable: "当前应用位置或签名不支持登录项"
+    }
   }
 
   private var controls: some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Label("特权控制组件", systemImage: "lock.shield")
-        Spacer()
-        Text(helperManager.state.label)
-          .foregroundStyle(helperManager.isReady ? .green : .orange)
-        if !helperManager.isReady {
-          Button(helperManager.state == .approvalRequired ? "打开设置" : "启用") {
-            if helperManager.state == .approvalRequired {
-              helperManager.openApprovalSettings()
-            } else {
-              helperManager.enable()
-            }
-          }
-          .controlSize(.small)
+      PopoverSection(title: "风扇控制", symbol: "fan") {
+        SettingRow(
+          title: "在菜单栏显示", subtitle: "显示当前平均风扇转速", symbol: "menubar.rectangle"
+        ) {
+          Toggle(
+            "在菜单栏显示风扇状态",
+            isOn: Binding(
+              get: { controller.showsFanStatusInMenuBar },
+              set: { controller.setShowsFanStatusInMenuBar($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
         }
+        SectionDivider()
+        SettingRow(
+          title: "特权控制组件", subtitle: helperManager.state.label, symbol: "lock.shield"
+        ) {
+          if helperManager.isReady {
+            Label("可用", systemImage: "checkmark.circle.fill")
+              .font(.caption)
+              .foregroundStyle(.green)
+          } else {
+            Button(helperManager.state == .approvalRequired ? "打开设置" : "启用") {
+              if helperManager.state == .approvalRequired {
+                helperManager.openApprovalSettings()
+              } else {
+                helperManager.enable()
+              }
+            }
+            .controlSize(.mini)
+          }
+        }
+        SectionDivider()
+        SettingRow(
+          title: "智能风扇曲线", subtitle: "CPU 与电池曲线取较高转速目标",
+          symbol: "chart.line.uptrend.xyaxis"
+        ) {
+          Toggle(
+            "智能风扇曲线",
+            isOn: Binding(
+              get: { controller.isControlEnabled },
+              set: { controller.setControlEnabled($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("智能风扇曲线")
+          .disabled(!helperManager.isReady)
+        }
+        SectionDivider()
+        SettingRow(
+          title: "风扇加速系数", subtitle: "0.5× 柔和 · 1.0× 标准 · 2.0× 强劲，转速保持平滑",
+          symbol: "gauge.with.dots.needle.67percent"
+        ) {
+          FanAccelerationSlider(
+            value: Binding(
+              get: { controller.fanAccelerationFactor },
+              set: { controller.setFanAccelerationFactor($0) }
+            ))
+        }
+        .disabled(!controller.isControlEnabled)
       }
-      .font(.caption)
-
-      Toggle(
-        "启用智能风扇曲线",
-        isOn: Binding(
-          get: { controller.isControlEnabled },
-          set: { controller.setControlEnabled($0) }
-        )
-      )
-      .toggleStyle(.switch)
-      .disabled(!helperManager.isReady)
 
       VStack(alignment: .leading, spacing: 7) {
         HStack {
-          Text("开始加速温度")
+          Text("CPU 开始加速温度")
           Spacer()
           Text("\(Int(controller.thresholdCelsius.rounded()))°C")
             .font(.system(.title3, design: .rounded).monospacedDigit())
@@ -164,43 +656,364 @@ struct FanPopoverView: View {
           ), in: FanSafetyPolicy.thresholdRange, step: 1
         )
         .accessibilityLabel("开始加速温度")
-        Text("按所选温度来源判断：低于此温度由 macOS 控制；超过后线性加速，90°C 达到最大转速。热点达到 100°C 时始终紧急满速。")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        Text(
+          "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
+            + "介入后会连续执行平滑曲线，不再定时切回自动控制；低于退出温度、关闭功能、睡眠、退出或发生异常时才交还 macOS。90°C 时立即请求满速。"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
+      .padding(12)
+      .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
       .disabled(!controller.isControlEnabled)
+
     }
   }
 
   private var curvePreview: some View {
-    FanCurvePreview(
-      threshold: controller.thresholdCelsius,
-      currentTemperature: controller.currentTemperature,
-      curvePercent: controller.curvePercent,
-      isEnabled: controller.isControlEnabled)
+    PopoverSection(title: "曲线预览", symbol: "chart.xyaxis.line") {
+      FanCurvePreview(
+        name: "CPU",
+        threshold: controller.thresholdCelsius,
+        currentTemperature: controller.currentTemperature,
+        curvePercent: controller.curvePercent,
+        domainMinimum: FanSafetyPolicy.thresholdRange.lowerBound,
+        maximumTemperature: 90,
+        accelerationFactor: controller.fanAccelerationFactor,
+        color: .orange,
+        isEnabled: controller.isControlEnabled)
+      SectionDivider()
+      FanCurvePreview(
+        name: "电池区域",
+        threshold: controller.batteryCurveThreshold,
+        currentTemperature: controller.currentBatteryTemperature,
+        curvePercent: controller.batteryCurvePercent,
+        domainMinimum: BatteryFanPolicy.thresholdRange.lowerBound,
+        maximumTemperature: BatteryFanPolicy.maximumTemperature,
+        accelerationFactor: controller.fanAccelerationFactor,
+        color: .cyan,
+        isEnabled: controller.isControlEnabled && controller.isBatteryCurveEnabled)
+    }
   }
 
   private var safetyNote: some View {
-    Label(
-      "目标转速绝不会低于当前实际转速；传感器或控制异常时会恢复 macOS 自动控制。",
-      systemImage: "shield.checkered"
-    )
+    HStack(alignment: .top, spacing: 9) {
+      Image(systemName: "shield.checkered")
+        .foregroundStyle(.green)
+        .frame(width: 18)
+      Text("介入时记录 macOS 的目标下限；首次接管不降低实际转速，之后按非对称限速平滑升降且不低于该下限。控制权异常时整组交还 macOS。")
+        .fixedSize(horizontal: false, vertical: true)
+    }
     .font(.caption)
     .foregroundStyle(.secondary)
+    .padding(11)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+  }
+}
+
+private struct TemperatureMetricCard: View {
+  let title: String
+  let value: Double?
+  let isControlSource: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 4) {
+        Text(title).font(.caption).foregroundStyle(.secondary)
+        Spacer(minLength: 2)
+        if isControlSource {
+          Text("控制").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange)
+        }
+      }
+      Text(value.map { "\(Int($0.rounded()))°C" } ?? "--°C")
+        .font(.system(.title3, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
+    }
+    .padding(9)
+    .frame(maxWidth: .infinity, minHeight: 70, alignment: .leading)
+    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(isControlSource ? Color.orange.opacity(0.8) : .clear, lineWidth: 1)
+    }
+  }
+}
+
+private struct PowerMetricCard: View {
+  let title: String
+  let value: String
+  let subtitle: String
+  let symbol: String
+  let color: Color
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 5) {
+        Image(systemName: symbol)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(color)
+          .frame(width: 20, height: 20)
+          .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Text(value)
+        .font(.system(.title3, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
+      Text(subtitle)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
+    }
+    .padding(9)
+    .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+    .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
+  }
+}
+
+private struct SensorGroupSummary: View {
+  let group: TemperatureSensorGroup
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Image(systemName: group.category.symbol)
+        .frame(width: 16).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(group.category.label).font(.caption)
+        Text(
+          group.category == .battery
+            ? "\(group.readings.count) 个传感器 · 最高" : "\(group.readings.count) 个传感器"
+        )
+        .font(.caption2).foregroundStyle(.secondary)
+      }
+      Spacer(minLength: 3)
+      Text("\(Int(displayValue.rounded()))°")
+        .font(.caption.monospacedDigit()).fontWeight(.medium)
+    }
+    .padding(7)
+    .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 7))
+  }
+
+  private var displayValue: Double {
+    group.category == .battery ? group.maximum : group.average
+  }
+}
+
+private struct PopoverSection<Content: View>: View {
+  let title: String
+  let symbol: String
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 9) {
+      Label(title, systemImage: symbol)
+        .font(.callout)
+        .fontWeight(.semibold)
+        .foregroundStyle(.primary)
+      VStack(spacing: 0) {
+        content
+      }
+      .padding(.horizontal, 12)
+      .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10)
+          .stroke(.separator.opacity(0.22), lineWidth: 0.5)
+      }
+    }
+  }
+}
+
+private struct SettingRow<Control: View>: View {
+  let title: String
+  let subtitle: String
+  let symbol: String
+  @ViewBuilder let control: Control
+
+  var body: some View {
+    HStack(alignment: .center, spacing: 11) {
+      Image(systemName: symbol)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(.secondary)
+        .frame(width: 22, height: 22)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+      VStack(alignment: .leading, spacing: 2) {
+        Text(title)
+          .font(.callout)
+          .foregroundStyle(.primary)
+        Text(subtitle)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(2)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      control
+        .frame(width: 158, alignment: .trailing)
+    }
+    .frame(minHeight: 46)
+  }
+}
+
+private struct CompactSwitchToggleStyle: ToggleStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    Button {
+      withAnimation(.easeOut(duration: 0.16)) {
+        configuration.isOn.toggle()
+      }
+    } label: {
+      Capsule()
+        .fill(
+          configuration.isOn
+            ? Color.accentColor : Color.secondary.opacity(0.28)
+        )
+        .frame(width: 30, height: 16)
+        .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+          Circle()
+            .fill(.white)
+            .frame(width: 12, height: 12)
+            .padding(2)
+            .shadow(color: .black.opacity(0.16), radius: 1, y: 0.5)
+        }
+    }
+    .buttonStyle(.plain)
+  }
+}
+
+private struct LabeledCompactToggle: View {
+  let title: String
+  @Binding var isOn: Bool
+
+  var body: some View {
+    VStack(spacing: 3) {
+      Text(title).font(.caption2).foregroundStyle(.secondary)
+      Toggle(title, isOn: $isOn)
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+    }
+  }
+}
+
+private struct BatteryMenuBarPreview: View {
+  let style: BatteryMenuBarStyle
+  let power: PowerReading?
+
+  private var level: Int { power?.batteryLevelPercent ?? 74 }
+  private var color: Color {
+    if power?.isBatteryCharging == true || power?.isBatteryFullyCharged == true { return .green }
+    if level <= 10 { return .red }
+    if level <= 20 { return .yellow }
+    return .primary
+  }
+
+  var body: some View {
+    Group {
+      if style == .macOSColored {
+        HStack(spacing: 1) {
+          ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3)
+              .stroke(Color.white, lineWidth: 1.3)
+            GeometryReader { geometry in
+              RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color(nsColor: .systemBlue))
+                .frame(width: max(0, (geometry.size.width - 4) * CGFloat(level) / 100))
+                .padding(2)
+            }
+            if power?.isBatteryCharging == true {
+              Image(systemName: "bolt.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+          }
+          .frame(width: 27, height: 14)
+          Capsule()
+            .fill(Color.white)
+            .frame(width: 2, height: 6)
+        }
+      } else if style == .iOSNative {
+        ZStack {
+          RoundedRectangle(cornerRadius: 3)
+            .stroke(color, lineWidth: 1.2)
+          GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 1.5)
+              .fill(color)
+              .frame(width: max(1, (geometry.size.width - 4) * CGFloat(level) / 100))
+              .padding(2)
+          }
+          Text("\(level)")
+            .font(.system(size: 7, weight: .bold, design: .rounded))
+            .foregroundStyle(level >= 48 ? Color(nsColor: .controlBackgroundColor) : color)
+        }
+        .frame(width: 29, height: 14)
+      } else {
+        Image(systemName: BatteryStatusPresentation.symbolName(for: power))
+          .symbolRenderingMode(.hierarchical)
+          .foregroundStyle(.primary)
+          .frame(width: 29, height: 18)
+      }
+    }
+    .frame(width: 32)
+  }
+}
+
+private struct SectionDivider: View {
+  var body: some View {
+    Divider().padding(.leading, 33)
+  }
+}
+
+private struct BatteryTemperatureSlider: View {
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Slider(
+        value: $value,
+        in: range,
+        step: 1
+      )
+      .accessibilityLabel("温度")
+      Text("\(Int(value.rounded()))°C")
+        .font(.caption.monospacedDigit())
+        .frame(width: 34, alignment: .trailing)
+    }
+  }
+}
+
+private struct FanAccelerationSlider: View {
+  @Binding var value: Double
+
+  var body: some View {
+    HStack(spacing: 7) {
+      Slider(value: $value, in: FanAccelerationProfile.range, step: 0.1)
+        .accessibilityLabel("风扇加速系数")
+      Text(String(format: "%.1f×", value))
+        .font(.caption.monospacedDigit())
+        .frame(width: 36, alignment: .trailing)
+    }
   }
 }
 
 private struct FanCurvePreview: View {
+  let name: String
   let threshold: Double
   let currentTemperature: Double?
   let curvePercent: Int?
+  let domainMinimum: Double
+  let maximumTemperature: Double
+  let accelerationFactor: Double
+  let color: Color
   let isEnabled: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       HStack {
-        Text(isEnabled ? "风扇调整预览" : "风扇调整预览（未启用）")
-          .font(.callout).fontWeight(.medium)
+        Text("\(name) · \(isEnabled ? "曲线已启用" : "曲线未启用")")
+          .foregroundStyle(isEnabled ? color : .secondary)
         Spacer()
         if let currentTemperature {
           Text("当前 \(Int(currentTemperature.rounded()))°C").font(.caption).monospacedDigit()
@@ -215,7 +1028,9 @@ private struct FanCurvePreview: View {
         let width = right - left
         let height = bottom - top
         func x(_ temperature: Double) -> Double {
-          left + min(1, max(0, (temperature - 50) / 40)) * width
+          left
+            + min(1, max(0, (temperature - domainMinimum) / (maximumTemperature - domainMinimum)))
+            * width
         }
         func y(_ fraction: Double) -> Double { bottom - min(1, max(0, fraction)) * height }
 
@@ -229,40 +1044,56 @@ private struct FanCurvePreview: View {
         var curve = Path()
         curve.move(to: CGPoint(x: left, y: bottom))
         curve.addLine(to: CGPoint(x: x(threshold), y: bottom))
-        curve.addLine(to: CGPoint(x: x(90), y: top))
+        let sampleCount = 32
+        for sample in 1...sampleCount {
+          let rawFraction = Double(sample) / Double(sampleCount)
+          let temperature = threshold + (maximumTemperature - threshold) * rawFraction
+          let adjustedFraction = FanAccelerationProfile.adjustedFraction(
+            rawFraction, factor: accelerationFactor)
+          curve.addLine(to: CGPoint(x: x(temperature), y: y(adjustedFraction)))
+        }
         context.stroke(
-          curve, with: .color(.orange), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+          curve, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
 
         if let currentTemperature {
           let fraction =
             currentTemperature <= threshold
-            ? 0 : min(1, (currentTemperature - threshold) / max(1, 90 - threshold))
+            ? 0
+            : FanAccelerationProfile.adjustedFraction(
+              min(
+                1,
+                (currentTemperature - threshold) / max(1, maximumTemperature - threshold)),
+              factor: accelerationFactor)
           let point = CGPoint(x: x(currentTemperature), y: y(fraction))
           context.fill(
             Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
             with: .color(.white))
           context.stroke(
             Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)),
-            with: .color(.orange), lineWidth: 3)
+            with: .color(color), lineWidth: 3)
         }
       }
       .frame(height: 92)
       .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
 
       HStack {
-        Text("50°C")
+        Text("\(Int(domainMinimum))°C")
         Spacer()
         Text("\(Int(threshold))°C 开始")
         Spacer()
-        Text("90°C 最大")
+        Text("\(Int(maximumTemperature))°C 最大")
       }
       .font(.caption2.monospacedDigit())
       .foregroundStyle(.secondary)
 
+      Text("加速系数 " + String(format: "%.1f×", accelerationFactor))
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
+
       if let currentTemperature {
         if let curvePercent {
           Text(
-            "\(isEnabled ? "当前控制" : "按当前设置")：\(Int(currentTemperature.rounded()))°C 时基础曲线约为最大转速的 \(curvePercent)%；若现有转速更高则不会降低。"
+            "\(isEnabled ? "当前控制" : "按当前设置")：\(Int(currentTemperature.rounded()))°C 时处于最低到最大转速区间的 \(curvePercent)%；若现有转速更高则不会降低。"
           )
         } else {
           Text("当前 \(Int(currentTemperature.rounded()))°C：低于设定温度，由 macOS 自动控制。")
