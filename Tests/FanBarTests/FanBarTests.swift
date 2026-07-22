@@ -13,6 +13,7 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   var maximum = [6_500.0, 6_800.0]
   var modes = [UInt8](repeating: 0, count: 2)
   var targets = [Double](repeating: 0, count: 2)
+  var targetReadSequences: [[Double]] = []
   var failTargetFan: Int?
   var failAutomaticFan: Int?
   var resetCount = 0
@@ -30,7 +31,12 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
   func powerReading() -> PowerReading? { power }
   func fanActualRPM(fan index: Int) throws -> Double { actual[index] }
-  func fanTargetRPM(fan index: Int) throws -> Double { targets[index] }
+  func fanTargetRPM(fan index: Int) throws -> Double {
+    guard targetReadSequences.indices.contains(index), !targetReadSequences[index].isEmpty else {
+      return targets[index]
+    }
+    return targetReadSequences[index].removeFirst()
+  }
   func fanMinimumRPM(fan index: Int) throws -> Double { minimum[index] }
   func fanMaximumRPM(fan index: Int) throws -> Double { maximum[index] }
   func fanMode(fan index: Int) throws -> UInt8 { modes[index] }
@@ -86,13 +92,40 @@ struct FanSafetyPolicyTests {
     #expect(try #require(manualTargets(decision)) == [3_400])
   }
 
-  @Test("manual control periodically yields to macOS")
+  @Test("manual control uses adaptive macOS demand audits")
   func manualControlAuditTiming() {
     let start = Date(timeIntervalSince1970: 100)
-    #expect(ManualControlSafety.systemDemandAuditInterval == 10)
-    #expect(!ManualControlSafety.shouldAudit(startedAt: nil, now: start.addingTimeInterval(20)))
-    #expect(!ManualControlSafety.shouldAudit(startedAt: start, now: start.addingTimeInterval(9.9)))
-    #expect(ManualControlSafety.shouldAudit(startedAt: start, now: start.addingTimeInterval(10)))
+    #expect(ManualControlSafety.systemDemandAuditInterval == 60)
+    #expect(
+      !ManualControlSafety.shouldAudit(
+        startedAt: nil, lastAuditAt: nil, learnedSampleCount: 100,
+        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
+        now: start.addingTimeInterval(100)))
+    #expect(
+      !ManualControlSafety.shouldAudit(
+        startedAt: start, lastAuditAt: nil, learnedSampleCount: 100,
+        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
+        now: start.addingTimeInterval(59.9)))
+    #expect(
+      ManualControlSafety.shouldAudit(
+        startedAt: start, lastAuditAt: nil, learnedSampleCount: 100,
+        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
+        now: start.addingTimeInterval(60)))
+    #expect(
+      ManualControlSafety.shouldAudit(
+        startedAt: start, lastAuditAt: nil, learnedSampleCount: 100,
+        temperatureRisePerSecond: 1.1, thermalSeverity: .nominal,
+        now: start.addingTimeInterval(10)))
+    #expect(
+      ManualControlSafety.shouldAudit(
+        startedAt: start, lastAuditAt: nil, learnedSampleCount: 100,
+        temperatureRisePerSecond: 0, thermalSeverity: .serious,
+        now: start.addingTimeInterval(10)))
+    #expect(
+      ManualControlSafety.shouldAudit(
+        startedAt: start, lastAuditAt: nil, learnedSampleCount: 0,
+        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
+        now: start.addingTimeInterval(30)))
   }
 
   @Test("90°C requests maximum fan speed")
@@ -250,6 +283,115 @@ struct FanSafetyPolicyTests {
         batteryPolicy.decision(
           temperature: 44, fans: [fan], threshold: 38, wasManual: false)))
     #expect(targets == [3_500])
+  }
+}
+
+@Suite("macOS fan curve learning")
+struct MacOSFanCurveLearningTests {
+  @Test("nearest historical samples produce a conservative target estimate")
+  func conservativePrediction() throws {
+    let samples = try (0..<8).map { index in
+      try #require(
+        historySample(
+          temperature: 46 + Double(index), target: 2_100 + Double(index) * 120,
+          source: .package, timestamp: Double(index)))
+    }
+    let query = MacOSFanLearningQuery(
+      controlSource: CPUTemperatureSource.package.rawValue,
+      cpuTemperature: 51, batteryTemperature: 35, systemPowerWatts: 30,
+      externalPowerConnected: true, thermalSeverity: .nominal, fanCount: 1)
+
+    let prediction = try #require(MacOSFanCurveModel.predict(samples: samples, query: query))
+
+    #expect(prediction.targets.count == 1)
+    #expect(prediction.targets[0] >= 2_700)
+    #expect(prediction.sampleCount == 8)
+    #expect(prediction.confidence > 0)
+  }
+
+  @Test("history never mixes unlike temperature sources")
+  func sourceIsolation() throws {
+    let packageSamples = try (0..<5).map { index in
+      try #require(
+        historySample(
+          temperature: 50, target: 2_400, source: .package, timestamp: Double(index)))
+    }
+    let hotspotSamples = try (0..<20).map { index in
+      try #require(
+        historySample(
+          temperature: 50, target: 5_500, source: .hotspot,
+          timestamp: Double(index + 10)))
+    }
+    let query = MacOSFanLearningQuery(
+      controlSource: CPUTemperatureSource.package.rawValue,
+      cpuTemperature: 50, batteryTemperature: 35, systemPowerWatts: 30,
+      externalPowerConnected: true, thermalSeverity: .nominal, fanCount: 1)
+
+    #expect(
+      MacOSFanCurveModel.predict(samples: packageSamples + hotspotSamples, query: query) == nil)
+  }
+
+  @Test("learned target only raises the safety floor")
+  func learnedTargetRaisesFloor() {
+    let snapshot = FanSnapshot(
+      temperature: 55,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 2_000, reportedTargetRPM: 2_200,
+          minimumRPM: 1_500, maximumRPM: 6_000)
+      ])
+
+    let raised = snapshot.applyingLearnedSystemFloor([3_100])
+    let unchanged = snapshot.applyingLearnedSystemFloor([1_800])
+
+    #expect(raised.fans[0].activeTargetFloor == 3_100)
+    #expect(unchanged.fans[0].activeTargetFloor == 2_200)
+  }
+
+  @Test("history export is model-specific, persistent, and contains no device identity")
+  func historyExport() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let file = root.appendingPathComponent("history.json")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let device = FanDeviceProfile(modelIdentifier: "MacBookPro18,3", architecture: "arm64")
+    let store = MacOSFanHistoryStore(fileURL: file, device: device)
+    let sample = try #require(
+      historySample(temperature: 52, target: 2_600, source: .package, timestamp: 1))
+
+    try await store.record(sample)
+    let export = try await store.makeExport()
+    let persisted = MacOSFanHistoryStore(fileURL: file, device: device)
+
+    #expect(await persisted.sampleCount() == 1)
+    #expect(export.suggestedFilename == "fanbar-profile-MacBookPro18-3-v1.json")
+    let text = try #require(String(data: export.data, encoding: .utf8))
+    #expect(text.contains("MacBookPro18,3"))
+    #expect(text.contains("No serial number"))
+    #expect(text.contains("fanbar.machine-profile"))
+    #expect(!text.contains("recordedAt"))
+    #expect(!text.contains("updatedAt"))
+    #expect(!text.localizedCaseInsensitiveContains("serialNumber"))
+    #expect(!text.localizedCaseInsensitiveContains("userName"))
+    #expect(!text.localizedCaseInsensitiveContains("hostName"))
+  }
+
+  private func historySample(
+    temperature: Double, target: Double, source: CPUTemperatureSource, timestamp: Double
+  ) -> MacOSFanHistorySample? {
+    MacOSFanHistorySample(
+      snapshot: FanSnapshot(
+        temperature: temperature, batteryTemperature: 35,
+        power: PowerReading(
+          isExternalPowerConnected: true, isBatteryCharging: false,
+          inputCapacityWatts: 96, systemPowerWatts: 30,
+          batteryChargingPowerWatts: nil),
+        fans: [
+          FanReading(
+            index: 0, actualRPM: target - 100, reportedTargetRPM: target,
+            minimumRPM: 1_500, maximumRPM: 6_000)
+        ]),
+      controlSource: source, thermalSeverity: .nominal,
+      recordedAt: Date(timeIntervalSince1970: timestamp))
   }
 }
 
@@ -480,6 +622,21 @@ struct CPUTemperatureSelectionTests {
 
 @Suite("Fan service transactions", .serialized)
 struct FanServiceTests {
+  @Test("automatic demand observation retains the highest settled system target")
+  func automaticDemandObservationUsesMaximum() async throws {
+    let hardware = MockFanHardware()
+    hardware.targetReadSequences = [
+      [2_100, 2_500, 2_350, 2_300],
+      [2_200, 2_400, 2_650, 2_500],
+    ]
+    let service = FanService(hardware: hardware)
+
+    let snapshot = try await service.observeAutomaticDemand(
+      observationCount: 4, interval: .zero)
+
+    #expect(snapshot.fans.map(\.reportedTargetRPM) == [2_500, 2_650])
+  }
+
   @Test("zero-fan hardware remains available for temperature monitoring")
   func fanlessHardwareCanMonitor() async throws {
     let hardware = MockFanHardware()

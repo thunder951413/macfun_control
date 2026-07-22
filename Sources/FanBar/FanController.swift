@@ -59,6 +59,10 @@ final class FanController: ObservableObject {
   @Published private(set) var samplingIntervalOption: SamplingIntervalOption
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   @Published private(set) var fanCapability: FanCapability = .unknown
+  @Published private(set) var learningSampleCount = 0
+  @Published private(set) var learnedMacOSTargets: [Double] = []
+  @Published private(set) var learningConfidence = 0.0
+  @Published private(set) var learningErrorText: String?
   @Published private var powerConnectionNoticeUntil: Date?
   let helperManager: PrivilegedHelperManager
   let launchAtLoginManager: LaunchAtLoginManager
@@ -79,6 +83,8 @@ final class FanController: ObservableObject {
   private let policy: FanSafetyPolicy
   private let batteryPolicy: BatteryFanPolicy
   private let slewLimiter: FanTargetSlewLimiter
+  private let historyStore: MacOSFanHistoryStore
+  private let deviceProfile: FanDeviceProfile
   private let pollIntervalOverride: TimeInterval?
   private var timer: Timer?
   private var isRefreshing = false
@@ -93,6 +99,9 @@ final class FanController: ObservableObject {
   private var previousExternalPowerConnected: Bool?
   private var powerConnectionNoticeTask: Task<Void, Never>?
   private var manualControlStartedAt: Date?
+  private var lastSystemDemandAuditAt: Date?
+  private var lastAutomaticHistorySampleAt: Date?
+  private var previousRawTemperatureSample: (value: Double, date: Date)?
 
   init(
     service: FanService = FanService(),
@@ -101,12 +110,16 @@ final class FanController: ObservableObject {
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
     pollInterval: TimeInterval = 0,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
-    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
+    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager(),
+    historyStore: MacOSFanHistoryStore = MacOSFanHistoryStore(),
+    deviceProfile: FanDeviceProfile = .current
   ) {
     self.service = service
     self.policy = policy
     self.batteryPolicy = batteryPolicy
     self.slewLimiter = slewLimiter
+    self.historyStore = historyStore
+    self.deviceProfile = deviceProfile
     pollIntervalOverride = pollInterval > 0 ? pollInterval : nil
     self.helperManager = helperManager
     self.launchAtLoginManager = launchAtLoginManager
@@ -159,6 +172,21 @@ final class FanController: ObservableObject {
 
   var samplingInterval: TimeInterval {
     pollIntervalOverride ?? samplingIntervalOption.seconds
+  }
+
+  var deviceModelText: String { deviceProfile.modelIdentifier }
+
+  var learningSummaryText: String {
+    if let learningErrorText { return "历史写入异常：\(learningErrorText)" }
+    guard learningSampleCount >= MacOSFanCurveModel.minimumSamples else {
+      return "已记录 \(learningSampleCount) 条，达到 \(MacOSFanCurveModel.minimumSamples) 条后开始估算"
+    }
+    return "已记录 \(learningSampleCount) 条 · 当前置信度 \(Int((learningConfidence * 100).rounded()))%"
+  }
+
+  var learnedMacOSTargetText: String {
+    guard !learnedMacOSTargets.isEmpty else { return "尚未形成估算" }
+    return learnedMacOSTargets.map { String(Int($0.rounded())) }.joined(separator: " / ") + " rpm"
   }
 
   var temperatureText: String {
@@ -335,6 +363,7 @@ final class FanController: ObservableObject {
     guard source != temperatureSource else { return }
     temperatureSource = source
     temperatureFilter.reset()
+    previousRawTemperatureSample = nil
     UserDefaults.standard.set(source.rawValue, forKey: Self.temperatureSourceKey)
     Task { await refresh() }
   }
@@ -361,7 +390,21 @@ final class FanController: ObservableObject {
     guard !hasStarted else { return }
     hasStarted = true
     scheduleTimer()
-    Task { await refresh() }
+    Task {
+      learningSampleCount = await historyStore.sampleCount()
+      await refresh()
+    }
+  }
+
+  func makeLearningHistoryExport() async -> MacOSFanHistoryExport? {
+    do {
+      let export = try await historyStore.makeExport()
+      learningErrorText = nil
+      return export
+    } catch {
+      learningErrorText = error.localizedDescription
+      return nil
+    }
   }
 
   func setThreshold(_ value: Double) {
@@ -405,6 +448,10 @@ final class FanController: ObservableObject {
       helperManager.refresh()
       let rawSnapshot = try await service.sample(source: temperatureSource)
       guard !isSuspended else { return }
+      let now = Date()
+      let thermalSeverity = SystemThermalSeverity.current
+      let temperatureRisePerSecond = temperatureRise(
+        current: rawSnapshot.temperature, now: now)
       let filteredTemperature = temperatureFilter.record(rawSnapshot.temperature)
       let filteredBatteryTemperature = rawSnapshot.batteryTemperature.map {
         batteryTemperatureFilter.record($0)
@@ -445,10 +492,16 @@ final class FanController: ObservableObject {
         return
       }
 
+      let currentlyManual = await service.isManual()
       guard isControlEnabled else {
-        if await service.isManual() {
+        if currentlyManual {
           logger.notice("restore requested reason=control-disabled")
           try await service.restoreAutomatic()
+        } else {
+          await recordAutomaticHistoryIfNeeded(
+            snapshot: snapshot, thermalSeverity: thermalSeverity, now: now)
+          _ = await refreshLearningPrediction(
+            for: snapshot, thermalSeverity: thermalSeverity)
         }
         targetRPMs = []
         state = .monitoring
@@ -456,7 +509,16 @@ final class FanController: ObservableObject {
         return
       }
 
-      let wasManual = await service.isManual()
+      var wasManual = currentlyManual
+      var decisionSnapshot = snapshot
+      if !wasManual {
+        await recordAutomaticHistoryIfNeeded(
+          snapshot: snapshot, thermalSeverity: thermalSeverity, now: now)
+      }
+      var prediction = await refreshLearningPrediction(
+        for: decisionSnapshot, thermalSeverity: thermalSeverity)
+      decisionSnapshot = decisionSnapshot.applyingLearnedSystemFloor(prediction?.targets)
+
       // FanBar supplements macOS using the selected CPU source and, when
       // explicitly enabled, the battery-area curve. Other sensors remain monitoring-only.
       let cpuEmergency = rawSnapshot.temperature >= policy.emergencyTemperature
@@ -464,28 +526,41 @@ final class FanController: ObservableObject {
         isBatteryCurveEnabled
         && (rawSnapshot.batteryTemperature ?? 0) >= BatteryFanPolicy.maximumTemperature
       if wasManual, !cpuEmergency, !batteryEmergency,
-        ManualControlSafety.shouldAudit(startedAt: manualControlStartedAt)
+        ManualControlSafety.shouldAudit(
+          startedAt: manualControlStartedAt, lastAuditAt: lastSystemDemandAuditAt,
+          learnedSampleCount: learningSampleCount,
+          temperatureRisePerSecond: temperatureRisePerSecond,
+          thermalSeverity: thermalSeverity, now: now)
       {
         logger.notice("restore requested reason=periodic-system-demand-audit")
         try await service.restoreAutomatic()
         setSessionActive(false)
+        lastSystemDemandAuditAt = now
         consecutiveCoolSamples = 0
-        targetRPMs = []
-        state = .automatic
-        statusText = "正在让 macOS 复核系统散热需求"
-        Task { @MainActor [weak self] in
-          try? await Task.sleep(for: .milliseconds(750))
-          await self?.refresh()
-        }
-        return
+        let observed = try await service.observeAutomaticDemand(source: temperatureSource)
+        fanReadings = observed.fans
+        let auditSnapshot = FanSnapshot(
+          temperature: snapshot.temperature,
+          hotspotTemperature: observed.hotspotTemperature,
+          hotspotSource: observed.hotspotSource,
+          batteryTemperature: snapshot.batteryTemperature,
+          batterySource: observed.batterySource,
+          power: observed.power,
+          fans: observed.fans)
+        await recordAutomaticHistoryIfNeeded(
+          snapshot: auditSnapshot, thermalSeverity: thermalSeverity, now: Date(), force: true)
+        prediction = await refreshLearningPrediction(
+          for: auditSnapshot, thermalSeverity: thermalSeverity)
+        decisionSnapshot = auditSnapshot.applyingLearnedSystemFloor(prediction?.targets)
+        wasManual = false
       }
       let cpuDecision = policy.decision(
-        for: snapshot, threshold: thresholdCelsius, wasManual: wasManual,
+        for: decisionSnapshot, threshold: thresholdCelsius, wasManual: wasManual,
         emergencyOverride: cpuEmergency, accelerationFactor: fanAccelerationFactor)
       let batteryDecision =
         isBatteryCurveEnabled
         ? batteryPolicy.decision(
-          temperature: snapshot.batteryTemperature, fans: snapshot.fans,
+          temperature: decisionSnapshot.batteryTemperature, fans: decisionSnapshot.fans,
           threshold: batteryCurveThreshold, wasManual: wasManual,
           accelerationFactor: fanAccelerationFactor)
         : .automatic
@@ -521,9 +596,9 @@ final class FanController: ObservableObject {
         consecutiveCoolSamples = 0
         setSessionActive(true)
         let limitedTargets = slewLimiter.limit(
-          desired: targets, previous: targetRPMs, fans: snapshot.fans,
+          desired: targets, previous: targetRPMs, fans: decisionSnapshot.fans,
           interval: samplingInterval, bypass: cpuEmergency || batteryEmergency)
-        try await service.apply(targets: limitedTargets, snapshot: snapshot)
+        try await service.apply(targets: limitedTargets, snapshot: decisionSnapshot)
         logger.notice(
           "manual curve applied temperature=\(snapshot.temperature, privacy: .public) reported=\(String(describing: snapshot.fans.map(\.reportedTargetRPM)), privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
         )
@@ -580,6 +655,7 @@ final class FanController: ObservableObject {
     isSuspended = true
     temperatureFilter.reset()
     batteryTemperatureFilter.reset()
+    previousRawTemperatureSample = nil
     timer?.invalidate()
     timer = nil
     await restoreForSafety(
@@ -597,6 +673,7 @@ final class FanController: ObservableObject {
     isSuspended = true
     temperatureFilter.reset()
     batteryTemperatureFilter.reset()
+    previousRawTemperatureSample = nil
     timer?.invalidate()
     timer = nil
     powerConnectionNoticeTask?.cancel()
@@ -662,6 +739,49 @@ final class FanController: ObservableObject {
       manualControlStartedAt = nil
     }
     UserDefaults.standard.set(active, forKey: Self.activeSessionKey)
+  }
+
+  private func temperatureRise(current: Double, now: Date) -> Double {
+    defer { previousRawTemperatureSample = (current, now) }
+    guard let previous = previousRawTemperatureSample else { return 0 }
+    let elapsed = now.timeIntervalSince(previous.date)
+    guard elapsed > 0 else { return 0 }
+    return max(0, (current - previous.value) / elapsed)
+  }
+
+  private func recordAutomaticHistoryIfNeeded(
+    snapshot: FanSnapshot, thermalSeverity: SystemThermalSeverity, now: Date,
+    force: Bool = false
+  ) async {
+    guard
+      force
+        || ManualControlSafety.shouldRecordAutomaticSample(
+          lastSampleAt: lastAutomaticHistorySampleAt, now: now),
+      (try? await service.isAutomaticControlActive()) == true,
+      let sample = MacOSFanHistorySample(
+        snapshot: snapshot, controlSource: temperatureSource,
+        thermalSeverity: thermalSeverity, recordedAt: now)
+    else { return }
+
+    do {
+      try await historyStore.record(sample)
+      lastAutomaticHistorySampleAt = now
+      learningSampleCount = await historyStore.sampleCount()
+      learningErrorText = nil
+    } catch {
+      learningErrorText = error.localizedDescription
+      logger.error("fan history write failed: \(error.localizedDescription, privacy: .public)")
+    }
+  }
+
+  private func refreshLearningPrediction(
+    for snapshot: FanSnapshot, thermalSeverity: SystemThermalSeverity
+  ) async -> MacOSFanPrediction? {
+    let prediction = await historyStore.prediction(
+      for: snapshot.learningQuery(source: temperatureSource, thermalSeverity: thermalSeverity))
+    learnedMacOSTargets = prediction?.targets ?? []
+    learningConfidence = prediction?.confidence ?? 0
+    return prediction
   }
 
   private func isPermissionDenied(_ error: Error) -> Bool {

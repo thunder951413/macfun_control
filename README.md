@@ -8,7 +8,9 @@ The popover separates live sensor summaries from settings. Its General section c
 
 Battery-area monitoring uses the hottest valid `TB*T` SMC reading (normally `TB0T`, `TB1T`, or `TB2T`). Users can configure a menu bar alert threshold and optionally enable a separate battery curve. CPU and battery curves are combined by taking the higher requested fan target; the battery curve reaches maximum speed at 50°C.
 
-The shared 0.5×–2.0× acceleration factor smoothly reshapes both curves without changing their start or maximum-temperature endpoints. FanBar enters manual mode only when its curve target is higher than the target currently reported by macOS. A manual session never lowers its target, and every ten seconds FanBar briefly restores automatic control so macOS can reassert demand from sensors FanBar does not use. Physical RPM increases still pass through the slew limiter; 90°C emergencies request maximum speed immediately.
+The shared 0.5×–2.0× acceleration factor smoothly reshapes both curves without changing their start or maximum-temperature endpoints. FanBar enters manual mode only when its curve target is meaningfully higher than the target currently reported by macOS. Automatic-mode observations build a private, model-specific history of Apple's target RPM using temperature, power source, system load, and thermal pressure. This learned estimate is only a conservative floor: a manual session never lowers its target, FanBar yields for a real macOS demand audit every 30 seconds while the first six samples are learned and every 60 seconds afterward, and rapid temperature rises or serious thermal pressure bring that audit forward. Each audit keeps the highest of four closely spaced system targets to reject transition noise. Physical RPM increases still pass through the slew limiter; 90°C emergencies request maximum speed immediately.
+
+The Settings tab shows the learned sample count and current estimate. History stays in `~/Library/Application Support/FanBar` and can be exported as a model-specific, repository-ready JSON file. Export is user initiated and excludes serial numbers, user names, host names, file paths, and exact timestamps; FanBar never uploads it automatically. The contribution format is documented in [`Profiles/README.md`](Profiles/README.md).
 
 The Sensor tab reads Apple's power data in the shared sampling cycle. It separately shows the connected adapter's negotiated input capacity, live system load, and real battery-side charging power. Charging power uses Apple's battery telemetry with voltage/current fallback and is hidden as a watt value when the battery is not charging. A newly connected power source temporarily replaces the normal menu bar content with a plug icon and the negotiated watts for two seconds. The Settings tab offers 2-second responsive, 3-second balanced, and 5-second efficient sampling; changing it reschedules the single shared timer immediately without adding a second hardware polling loop.
 
@@ -20,6 +22,8 @@ Fan capability is detected from AppleSMC rather than a model-name list. When `FN
 - Manual control starts only above the selected 40–80°C threshold.
 - A 3°C hysteresis band prevents repeated mode switching near the threshold.
 - A manual target is never lower than the fan's current speed.
+- Learned macOS demand can only raise the safety floor; it can never reduce a real or previous target.
+- Automatic-demand audits use a 60-second steady-state interval and react sooner to rapid heating or serious system thermal pressure.
 - The acceleration factor reshapes desired targets while the asymmetric RPM slew limiter remains authoritative.
 - At 90°C, FanBar requests the hardware-reported maximum speed.
 - Invalid sensor data, partial multi-fan writes, sleep, disabling control, and normal quit all trigger an automatic-mode restore.

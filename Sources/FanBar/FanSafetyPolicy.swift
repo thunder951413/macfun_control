@@ -42,11 +42,35 @@ struct FanReading: Sendable, Equatable, Identifiable {
 }
 
 enum ManualControlSafety {
-  static let systemDemandAuditInterval: TimeInterval = 10
+  static let initialSystemDemandAuditInterval: TimeInterval = 30
+  static let systemDemandAuditInterval: TimeInterval = 60
+  static let automaticHistorySampleInterval: TimeInterval = 30
+  static let eventAuditCooldown: TimeInterval = 10
+  static let rapidTemperatureRisePerSecond = 1.0
+  static let takeoverMarginRPM = 100.0
+  static let learnedSampleThreshold = MacOSFanCurveModel.minimumSamples
 
-  static func shouldAudit(startedAt: Date?, now: Date = Date()) -> Bool {
+  static func shouldAudit(
+    startedAt: Date?, lastAuditAt: Date?, learnedSampleCount: Int,
+    temperatureRisePerSecond: Double, thermalSeverity: SystemThermalSeverity,
+    now: Date = Date()
+  ) -> Bool {
     guard let startedAt else { return false }
-    return now.timeIntervalSince(startedAt) >= systemDemandAuditInterval
+    let reference = max(startedAt, lastAuditAt ?? .distantPast)
+    let elapsed = now.timeIntervalSince(reference)
+    let hasThermalEvent =
+      thermalSeverity.rawValue >= SystemThermalSeverity.serious.rawValue
+      || temperatureRisePerSecond >= rapidTemperatureRisePerSecond
+    if hasThermalEvent, elapsed >= eventAuditCooldown { return true }
+    let interval =
+      learnedSampleCount < learnedSampleThreshold
+      ? initialSystemDemandAuditInterval : systemDemandAuditInterval
+    return elapsed >= interval
+  }
+
+  static func shouldRecordAutomaticSample(lastSampleAt: Date?, now: Date = Date()) -> Bool {
+    guard let lastSampleAt else { return true }
+    return now.timeIntervalSince(lastSampleAt) >= automaticHistorySampleInterval
   }
 }
 
@@ -121,7 +145,11 @@ struct BatteryFanPolicy: Sendable {
       let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
       return min(fan.maximumRPM, max(fan.activeTargetFloor, curveTarget))
     }
-    guard wasManual || zip(curveTargets, fans).contains(where: { $0 > $1.activeTargetFloor })
+    guard
+      wasManual
+        || zip(curveTargets, fans).contains(where: {
+          $0 >= $1.activeTargetFloor + ManualControlSafety.takeoverMarginRPM
+        })
     else { return .automatic }
     return .manual(curveTargets)
   }
@@ -241,7 +269,9 @@ struct FanSafetyPolicy: Sendable {
     }
     guard
       emergency || wasManual
-        || zip(targets, snapshot.fans).contains(where: { $0 > $1.activeTargetFloor })
+        || zip(targets, snapshot.fans).contains(where: {
+          $0 >= $1.activeTargetFloor + ManualControlSafety.takeoverMarginRPM
+        })
     else { return .automatic }
     return .manual(targets)
   }
