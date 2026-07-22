@@ -247,6 +247,12 @@ final class FanController: ObservableObject {
 
   var menuBarText: String {
     if let notice = menuBarPowerConnectionText { return notice }
+    return [menuBarNonBatteryText, menuBarBatteryText]
+      .filter { !$0.isEmpty }
+      .joined(separator: "  ")
+  }
+
+  var menuBarNonBatteryText: String {
     let temperature = currentTemperature.map { "\(Int($0.rounded()))°" } ?? "--°"
     let averageRPM =
       fanReadings.isEmpty
@@ -256,15 +262,18 @@ final class FanController: ObservableObject {
       averageRPM.map { value in
         value >= 1_000 ? String(format: "%.1fk", value / 1_000) : "\(Int(value.rounded()))"
       } ?? "--"
-    let battery = BatteryStatusPresentation.text(
-      for: currentPower,
-      style: batteryMenuBarStyle,
-      showsPercentage: showsBatteryPercentageInMenuBar)
     var components: [String] = []
     if effectiveMenuBarDisplayMode.includesTemperature { components.append(temperature) }
     if effectiveMenuBarDisplayMode.includesFan { components.append(rpm) }
-    if effectiveMenuBarDisplayMode.includesBattery, !battery.isEmpty { components.append(battery) }
     return components.joined(separator: "  ")
+  }
+
+  var menuBarBatteryText: String {
+    guard effectiveMenuBarDisplayMode.includesBattery else { return "" }
+    return BatteryStatusPresentation.text(
+      for: currentPower,
+      style: batteryMenuBarStyle,
+      showsPercentage: showsBatteryPercentageInMenuBar)
   }
 
   var hasControllableFans: Bool { fanCapability == .available }

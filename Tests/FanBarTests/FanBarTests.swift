@@ -468,6 +468,33 @@ struct MenuBarDisplayModeTests {
     #expect(!BatteryMenuBarStyle.macOSColored.embedsPercentage)
   }
 
+  @Test("colored battery artwork stays colored and combined text keeps battery last")
+  @MainActor
+  func coloredBatteryMenuLayout() async {
+    let hardware = MockFanHardware()
+    hardware.count = 0
+    hardware.power = PowerReading(
+      isExternalPowerConnected: true, isBatteryCharging: false, batteryLevelPercent: 80,
+      inputCapacityWatts: 67, systemPowerWatts: 20, batteryChargingPowerWatts: nil)
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600)
+    controller.setMenuBarDisplayMode(.temperatureAndBattery)
+    controller.setBatteryMenuBarStyle(.macOSColored)
+    controller.setShowsBatteryPercentageInMenuBar(true)
+    await controller.refresh()
+
+    #expect(controller.menuBarNonBatteryText == "70°")
+    #expect(controller.menuBarBatteryText == "80%")
+    #expect(controller.menuBarText == "70°  80%")
+    let colored = BatteryMenuBarImageRenderer.image(
+      style: .macOSColored, power: hardware.power, accessibilityDescription: "电池状态")
+    let native = BatteryMenuBarImageRenderer.image(
+      style: .macOSNative, power: hardware.power, accessibilityDescription: "电池状态")
+    #expect(!colored.isTemplate)
+    #expect(native.isTemplate)
+    _ = await controller.shutdown()
+  }
+
   @Test("fanless controller can use battery-only menu bar status")
   @MainActor
   func fanlessBatteryMenuStatus() async {

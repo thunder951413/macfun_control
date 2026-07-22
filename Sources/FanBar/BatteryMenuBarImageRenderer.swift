@@ -17,7 +17,7 @@ enum BatteryMenuBarImageRenderer {
     case .macOSColored:
       return systemBatteryImage(
         power: power,
-        color: statusColor(for: power),
+        color: coloredStatusColor(for: power),
         accessibilityDescription: accessibilityDescription)
     case .iOSNative:
       return compactBatteryImage(
@@ -59,7 +59,7 @@ enum BatteryMenuBarImageRenderer {
       let level = CGFloat(min(100, max(0, power?.batteryLevelPercent ?? 0))) / 100
       let bodyRect = NSRect(x: 0.75, y: 1, width: 26, height: 12)
       let body = NSBezierPath(roundedRect: bodyRect, xRadius: 3.2, yRadius: 3.2)
-      let outline = statusColor(for: power)
+      let outline = nativeStatusColor(for: power)
       outline.setStroke()
       body.lineWidth = 1.35
       body.stroke()
@@ -97,7 +97,14 @@ enum BatteryMenuBarImageRenderer {
     return image
   }
 
-  private static func statusColor(for power: PowerReading?) -> NSColor {
+  private static func coloredStatusColor(for power: PowerReading?) -> NSColor {
+    guard let level = power?.batteryLevelPercent else { return .secondaryLabelColor }
+    if level <= 10 { return .systemRed }
+    if level <= 20 { return .systemYellow }
+    return .systemGreen
+  }
+
+  private static func nativeStatusColor(for power: PowerReading?) -> NSColor {
     guard let level = power?.batteryLevelPercent else { return .secondaryLabelColor }
     if power?.isBatteryCharging == true || power?.isBatteryFullyCharged == true {
       return .systemGreen

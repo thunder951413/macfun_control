@@ -106,25 +106,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     guard let button = statusItem?.button else { return }
     let description = controller.menuBarAccessibilityDescription
     button.image = primaryMenuBarImage(accessibilityDescription: description)
-    let normalText = controller.menuBarText
     let attributedTitle = NSMutableAttributedString()
+    func appendLabelText(_ text: String) {
+      guard !text.isEmpty else { return }
+      attributedTitle.append(
+        NSAttributedString(
+          string: text,
+          attributes: [.foregroundColor: NSColor.labelColor]))
+    }
     if controller.showsBatteryAccessoryMenuBarIcon {
+      appendLabelText(controller.menuBarNonBatteryText)
+      if attributedTitle.length > 0 {
+        attributedTitle.append(NSAttributedString(string: "   "))
+      }
       let attachment = NSTextAttachment()
       let accessory = BatteryMenuBarImageRenderer.image(
         style: controller.batteryMenuBarStyle,
         power: controller.currentPower,
         accessibilityDescription: "电池状态")
       attachment.image = accessory
-      let width = controller.batteryMenuBarStyle == .iOSNative ? 30.0 : 17.0
+      let width = controller.batteryMenuBarStyle == .iOSNative ? 31.0 : 19.0
       attachment.bounds = NSRect(x: 0, y: -2, width: width, height: 14)
       attributedTitle.append(NSAttributedString(attachment: attachment))
-      if !normalText.isEmpty { attributedTitle.append(NSAttributedString(string: " ")) }
-    }
-    if !normalText.isEmpty {
-      attributedTitle.append(
-        NSAttributedString(
-          string: normalText,
-          attributes: [.foregroundColor: NSColor.labelColor]))
+      if !controller.menuBarBatteryText.isEmpty {
+        attributedTitle.append(NSAttributedString(string: " "))
+        appendLabelText(controller.menuBarBatteryText)
+      }
+    } else {
+      appendLabelText(controller.menuBarText)
     }
     if let alert = controller.menuBarHotspotAlertText {
       if attributedTitle.length > 0 { attributedTitle.append(NSAttributedString(string: "  ")) }

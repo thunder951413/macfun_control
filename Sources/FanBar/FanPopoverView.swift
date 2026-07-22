@@ -905,6 +905,7 @@ private struct BatteryMenuBarPreview: View {
     if power?.isBatteryCharging == true || power?.isBatteryFullyCharged == true { return .green }
     if level <= 10 { return .red }
     if level <= 20 { return .yellow }
+    if style == .macOSColored { return .green }
     return .primary
   }
 
