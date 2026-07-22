@@ -256,7 +256,7 @@ struct FanPopoverView: View {
           ForEach(controller.availableMenuBarDisplayModes) { mode in Text(mode.label).tag(mode) }
         }
         .labelsHidden()
-        .frame(width: 172)
+        .frame(width: 158)
       }
       SectionDivider()
       SettingRow(
@@ -274,7 +274,7 @@ struct FanPopoverView: View {
           ForEach(CPUTemperatureSource.allCases) { source in Text(source.label).tag(source) }
         }
         .labelsHidden()
-        .frame(width: 172)
+        .frame(width: 158)
       }
       SectionDivider()
       SettingRow(
@@ -293,7 +293,7 @@ struct FanPopoverView: View {
           }
         }
         .labelsHidden()
-        .frame(width: 172)
+        .frame(width: 158)
       }
       SectionDivider()
       SettingRow(
@@ -308,7 +308,8 @@ struct FanPopoverView: View {
           )
         )
         .labelsHidden()
-        .toggleStyle(.switch)
+        .toggleStyle(CompactSwitchToggleStyle())
+        .accessibilityLabel("高温热点提醒")
       }
       SectionDivider()
       SettingRow(
@@ -317,7 +318,7 @@ struct FanPopoverView: View {
         HStack(spacing: 8) {
           if launchAtLoginManager.state == .approvalRequired {
             Button("去批准") { launchAtLoginManager.openApprovalSettings() }
-              .controlSize(.small)
+              .controlSize(.mini)
           }
           Toggle(
             "开机启动",
@@ -327,7 +328,8 @@ struct FanPopoverView: View {
             )
           )
           .labelsHidden()
-          .toggleStyle(.switch)
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("开机启动")
           .disabled(launchAtLoginManager.state == .unavailable)
         }
       }
@@ -356,7 +358,8 @@ struct FanPopoverView: View {
           )
         )
         .labelsHidden()
-        .toggleStyle(.switch)
+        .toggleStyle(CompactSwitchToggleStyle())
+        .accessibilityLabel("菜单栏高温提醒")
       }
       SectionDivider()
       SettingRow(
@@ -382,7 +385,8 @@ struct FanPopoverView: View {
             )
           )
           .labelsHidden()
-          .toggleStyle(.switch)
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("电池温度影响风扇转速")
         }
         SectionDivider()
         SettingRow(
@@ -445,7 +449,7 @@ struct FanPopoverView: View {
                 helperManager.enable()
               }
             }
-            .controlSize(.small)
+            .controlSize(.mini)
           }
         }
         SectionDivider()
@@ -461,7 +465,8 @@ struct FanPopoverView: View {
             )
           )
           .labelsHidden()
-          .toggleStyle(.switch)
+          .toggleStyle(CompactSwitchToggleStyle())
+          .accessibilityLabel("智能风扇曲线")
           .disabled(!helperManager.isReady)
         }
         SectionDivider()
@@ -538,7 +543,7 @@ struct FanPopoverView: View {
       Image(systemName: "shield.checkered")
         .foregroundStyle(.green)
         .frame(width: 18)
-      Text("目标转速绝不会低于当前实际转速；传感器或控制异常时会恢复 macOS 自动控制。")
+      Text("目标转速绝不会低于 macOS 当前目标或实际转速；传感器或控制异常时会恢复系统自动控制。")
         .fixedSize(horizontal: false, vertical: true)
     }
     .font(.caption)
@@ -585,23 +590,28 @@ private struct PowerMetricCard: View {
   let color: Color
 
   var body: some View {
-    HStack(spacing: 10) {
-      Image(systemName: symbol)
-        .font(.title3)
-        .foregroundStyle(color)
-        .frame(width: 30, height: 30)
-        .background(color.opacity(0.1), in: Circle())
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title).font(.caption).foregroundStyle(.secondary)
-        Text(value)
-          .font(.system(.title3, design: .rounded).monospacedDigit())
-          .fontWeight(.semibold)
-        Text(subtitle).font(.caption2).foregroundStyle(.secondary)
+    VStack(alignment: .leading, spacing: 5) {
+      HStack(spacing: 5) {
+        Image(systemName: symbol)
+          .font(.system(size: 11, weight: .semibold))
+          .foregroundStyle(color)
+          .frame(width: 20, height: 20)
+          .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+        Text(title)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
       }
-      Spacer(minLength: 2)
+      Text(value)
+        .font(.system(.title3, design: .rounded).monospacedDigit())
+        .fontWeight(.semibold)
+      Text(subtitle)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .lineLimit(1)
     }
-    .padding(10)
-    .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
+    .padding(9)
+    .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
     .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
   }
 }
@@ -668,10 +678,10 @@ private struct SettingRow<Control: View>: View {
   var body: some View {
     HStack(alignment: .center, spacing: 11) {
       Image(systemName: symbol)
-        .font(.system(size: 13, weight: .medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(.secondary)
-        .frame(width: 24, height: 24)
-        .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+        .frame(width: 22, height: 22)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
       VStack(alignment: .leading, spacing: 2) {
         Text(title)
           .font(.callout)
@@ -683,15 +693,40 @@ private struct SettingRow<Control: View>: View {
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       control
-        .frame(width: 172, alignment: .trailing)
+        .frame(width: 158, alignment: .trailing)
     }
-    .frame(minHeight: 49)
+    .frame(minHeight: 46)
+  }
+}
+
+private struct CompactSwitchToggleStyle: ToggleStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    Button {
+      withAnimation(.easeOut(duration: 0.16)) {
+        configuration.isOn.toggle()
+      }
+    } label: {
+      Capsule()
+        .fill(
+          configuration.isOn
+            ? Color.accentColor : Color.secondary.opacity(0.28)
+        )
+        .frame(width: 30, height: 16)
+        .overlay(alignment: configuration.isOn ? .trailing : .leading) {
+          Circle()
+            .fill(.white)
+            .frame(width: 12, height: 12)
+            .padding(2)
+            .shadow(color: .black.opacity(0.16), radius: 1, y: 0.5)
+        }
+    }
+    .buttonStyle(.plain)
   }
 }
 
 private struct SectionDivider: View {
   var body: some View {
-    Divider().padding(.leading, 35)
+    Divider().padding(.leading, 33)
   }
 }
 

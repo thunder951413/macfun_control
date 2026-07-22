@@ -61,19 +61,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return .terminateLater
   }
 
+  func applicationShouldHandleReopen(
+    _ sender: NSApplication, hasVisibleWindows flag: Bool
+  ) -> Bool {
+    if !popover.isShown { showPopover() }
+    return true
+  }
+
   func applicationWillTerminate(_ notification: Notification) {
     if let sleepObserver { NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver) }
     if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
   }
 
   @objc private func togglePopover() {
-    guard let button = statusItem.button else { return }
+    guard statusItem.button != nil else { return }
     if popover.isShown {
       popover.performClose(nil)
     } else {
-      popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-      popover.contentViewController?.view.window?.makeKey()
+      showPopover()
     }
+  }
+
+  private func showPopover() {
+    guard let button = statusItem?.button else { return }
+    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    popover.contentViewController?.view.window?.makeKey()
   }
 
   private func updateStatusItem() {
