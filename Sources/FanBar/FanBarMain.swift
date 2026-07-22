@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+    removeLegacyFanLearningHistory()
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     if let button = statusItem.button {
@@ -46,6 +47,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) { [weak self] _ in
       Task { @MainActor in self?.controller.resume() }
     }
+  }
+
+  private func removeLegacyFanLearningHistory() {
+    guard
+      let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask
+      ).first
+    else { return }
+    let history =
+      applicationSupport
+      .appendingPathComponent("FanBar", isDirectory: true)
+      .appendingPathComponent("macOS-fan-history-v1.json")
+    try? FileManager.default.removeItem(at: history)
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

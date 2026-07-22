@@ -1,6 +1,23 @@
 import FanBarHardware
 import Foundation
 
+enum SystemThermalSeverity: Int, Sendable {
+  case nominal = 0
+  case fair = 1
+  case serious = 2
+  case critical = 3
+
+  static var current: Self {
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal: .nominal
+    case .fair: .fair
+    case .serious: .serious
+    case .critical: .critical
+    @unknown default: .fair
+    }
+  }
+}
+
 enum FanAccelerationProfile {
   static let range = 0.5...2.0
   static let defaultFactor = 1.0
@@ -42,16 +59,13 @@ struct FanReading: Sendable, Equatable, Identifiable {
 }
 
 enum ManualControlSafety {
-  static let initialSystemDemandAuditInterval: TimeInterval = 30
-  static let systemDemandAuditInterval: TimeInterval = 60
-  static let automaticHistorySampleInterval: TimeInterval = 30
+  static let systemDemandAuditInterval: TimeInterval = 30
   static let eventAuditCooldown: TimeInterval = 10
   static let rapidTemperatureRisePerSecond = 1.0
   static let takeoverMarginRPM = 100.0
-  static let learnedSampleThreshold = MacOSFanCurveModel.minimumSamples
 
   static func shouldAudit(
-    startedAt: Date?, lastAuditAt: Date?, learnedSampleCount: Int,
+    startedAt: Date?, lastAuditAt: Date?,
     temperatureRisePerSecond: Double, thermalSeverity: SystemThermalSeverity,
     now: Date = Date()
   ) -> Bool {
@@ -62,15 +76,7 @@ enum ManualControlSafety {
       thermalSeverity.rawValue >= SystemThermalSeverity.serious.rawValue
       || temperatureRisePerSecond >= rapidTemperatureRisePerSecond
     if hasThermalEvent, elapsed >= eventAuditCooldown { return true }
-    let interval =
-      learnedSampleCount < learnedSampleThreshold
-      ? initialSystemDemandAuditInterval : systemDemandAuditInterval
-    return elapsed >= interval
-  }
-
-  static func shouldRecordAutomaticSample(lastSampleAt: Date?, now: Date = Date()) -> Bool {
-    guard let lastSampleAt else { return true }
-    return now.timeIntervalSince(lastSampleAt) >= automaticHistorySampleInterval
+    return elapsed >= systemDemandAuditInterval
   }
 }
 

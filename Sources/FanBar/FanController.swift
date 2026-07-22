@@ -63,10 +63,6 @@ final class FanController: ObservableObject {
   @Published private(set) var samplingIntervalOption: SamplingIntervalOption
   @Published private(set) var selectedPopoverTab: PopoverTab = .sensors
   @Published private(set) var fanCapability: FanCapability = .unknown
-  @Published private(set) var learningSampleCount = 0
-  @Published private(set) var learnedMacOSTargets: [Double] = []
-  @Published private(set) var learningConfidence = 0.0
-  @Published private(set) var learningErrorText: String?
   @Published private var powerConnectionNoticeUntil: Date?
   let helperManager: PrivilegedHelperManager
   let launchAtLoginManager: LaunchAtLoginManager
@@ -89,8 +85,6 @@ final class FanController: ObservableObject {
   private let policy: FanSafetyPolicy
   private let batteryPolicy: BatteryFanPolicy
   private let slewLimiter: FanTargetSlewLimiter
-  private let historyStore: MacOSFanHistoryStore
-  private let deviceProfile: FanDeviceProfile
   private let pollIntervalOverride: TimeInterval?
   private var timer: Timer?
   private var isRefreshing = false
@@ -106,7 +100,6 @@ final class FanController: ObservableObject {
   private var powerConnectionNoticeTask: Task<Void, Never>?
   private var manualControlStartedAt: Date?
   private var lastSystemDemandAuditAt: Date?
-  private var lastAutomaticHistorySampleAt: Date?
   private var previousRawTemperatureSample: (value: Double, date: Date)?
 
   init(
@@ -116,16 +109,12 @@ final class FanController: ObservableObject {
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
     pollInterval: TimeInterval = 0,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
-    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager(),
-    historyStore: MacOSFanHistoryStore = MacOSFanHistoryStore(),
-    deviceProfile: FanDeviceProfile = .current
+    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
   ) {
     self.service = service
     self.policy = policy
     self.batteryPolicy = batteryPolicy
     self.slewLimiter = slewLimiter
-    self.historyStore = historyStore
-    self.deviceProfile = deviceProfile
     pollIntervalOverride = pollInterval > 0 ? pollInterval : nil
     self.helperManager = helperManager
     self.launchAtLoginManager = launchAtLoginManager
@@ -182,21 +171,6 @@ final class FanController: ObservableObject {
 
   var samplingInterval: TimeInterval {
     pollIntervalOverride ?? samplingIntervalOption.seconds
-  }
-
-  var deviceModelText: String { deviceProfile.modelIdentifier }
-
-  var learningSummaryText: String {
-    if let learningErrorText { return "历史写入异常：\(learningErrorText)" }
-    guard learningSampleCount >= MacOSFanCurveModel.minimumSamples else {
-      return "已记录 \(learningSampleCount) 条，达到 \(MacOSFanCurveModel.minimumSamples) 条后开始估算"
-    }
-    return "已记录 \(learningSampleCount) 条 · 当前置信度 \(Int((learningConfidence * 100).rounded()))%"
-  }
-
-  var learnedMacOSTargetText: String {
-    guard !learnedMacOSTargets.isEmpty else { return "尚未形成估算" }
-    return learnedMacOSTargets.map { String(Int($0.rounded())) }.joined(separator: " / ") + " rpm"
   }
 
   var temperatureText: String {
@@ -278,6 +252,7 @@ final class FanController: ObservableObject {
       } else {
         switch menuBarDisplayMode {
         case .fanSpeed, .temperatureAndFan: .temperature
+        case .fanAndBattery: .battery
         case .temperatureFanAndBattery: .temperatureAndBattery
         default: menuBarDisplayMode
         }
@@ -289,6 +264,7 @@ final class FanController: ObservableObject {
     case .temperatureAndFan: "\(temperature)  \(rpm)"
     case .battery: battery
     case .temperatureAndBattery: "\(temperature)  \(battery)"
+    case .fanAndBattery: "\(rpm)  \(battery)"
     case .temperatureFanAndBattery: "\(temperature)  \(rpm)  \(battery)"
     }
   }
@@ -362,6 +338,22 @@ final class FanController: ObservableObject {
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
     menuBarDisplayMode = mode
     UserDefaults.standard.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
+  }
+
+  var showsSensorStatusInMenuBar: Bool { menuBarDisplayMode.includesTemperature }
+  var showsFanStatusInMenuBar: Bool { menuBarDisplayMode.includesFan }
+  var showsBatteryStatusInMenuBar: Bool { menuBarDisplayMode.includesBattery }
+
+  func setShowsSensorStatusInMenuBar(_ enabled: Bool) {
+    setMenuBarComponents(temperature: enabled)
+  }
+
+  func setShowsFanStatusInMenuBar(_ enabled: Bool) {
+    setMenuBarComponents(fan: enabled)
+  }
+
+  func setShowsBatteryStatusInMenuBar(_ enabled: Bool) {
+    setMenuBarComponents(battery: enabled)
   }
 
   func setShowsHotspotMenuAlert(_ enabled: Bool) {
@@ -449,21 +441,7 @@ final class FanController: ObservableObject {
     guard !hasStarted else { return }
     hasStarted = true
     scheduleTimer()
-    Task {
-      learningSampleCount = await historyStore.sampleCount()
-      await refresh()
-    }
-  }
-
-  func makeLearningHistoryExport() async -> MacOSFanHistoryExport? {
-    do {
-      let export = try await historyStore.makeExport()
-      learningErrorText = nil
-      return export
-    } catch {
-      learningErrorText = error.localizedDescription
-      return nil
-    }
+    Task { await refresh() }
   }
 
   func setThreshold(_ value: Double) {
@@ -565,11 +543,6 @@ final class FanController: ObservableObject {
         if currentlyManual {
           logger.notice("restore requested reason=control-disabled")
           try await service.restoreAutomatic()
-        } else {
-          await recordAutomaticHistoryIfNeeded(
-            snapshot: snapshot, thermalSeverity: thermalSeverity, now: now)
-          _ = await refreshLearningPrediction(
-            for: snapshot, thermalSeverity: thermalSeverity)
         }
         targetRPMs = []
         state = .monitoring
@@ -579,13 +552,6 @@ final class FanController: ObservableObject {
 
       var wasManual = currentlyManual
       var decisionSnapshot = snapshot
-      if !wasManual {
-        await recordAutomaticHistoryIfNeeded(
-          snapshot: snapshot, thermalSeverity: thermalSeverity, now: now)
-      }
-      var prediction = await refreshLearningPrediction(
-        for: decisionSnapshot, thermalSeverity: thermalSeverity)
-      decisionSnapshot = decisionSnapshot.applyingLearnedSystemFloor(prediction?.targets)
 
       // FanBar supplements macOS using the selected CPU source and, when
       // explicitly enabled, the battery-area curve. Other sensors remain monitoring-only.
@@ -596,7 +562,6 @@ final class FanController: ObservableObject {
       if wasManual, !cpuEmergency, !batteryEmergency,
         ManualControlSafety.shouldAudit(
           startedAt: manualControlStartedAt, lastAuditAt: lastSystemDemandAuditAt,
-          learnedSampleCount: learningSampleCount,
           temperatureRisePerSecond: temperatureRisePerSecond,
           thermalSeverity: thermalSeverity, now: now)
       {
@@ -615,11 +580,7 @@ final class FanController: ObservableObject {
           batterySource: observed.batterySource,
           power: observed.power,
           fans: observed.fans)
-        await recordAutomaticHistoryIfNeeded(
-          snapshot: auditSnapshot, thermalSeverity: thermalSeverity, now: Date(), force: true)
-        prediction = await refreshLearningPrediction(
-          for: auditSnapshot, thermalSeverity: thermalSeverity)
-        decisionSnapshot = auditSnapshot.applyingLearnedSystemFloor(prediction?.targets)
+        decisionSnapshot = auditSnapshot
         wasManual = false
       }
       let cpuDecision = policy.decision(
@@ -817,41 +778,6 @@ final class FanController: ObservableObject {
     return max(0, (current - previous.value) / elapsed)
   }
 
-  private func recordAutomaticHistoryIfNeeded(
-    snapshot: FanSnapshot, thermalSeverity: SystemThermalSeverity, now: Date,
-    force: Bool = false
-  ) async {
-    guard
-      force
-        || ManualControlSafety.shouldRecordAutomaticSample(
-          lastSampleAt: lastAutomaticHistorySampleAt, now: now),
-      (try? await service.isAutomaticControlActive()) == true,
-      let sample = MacOSFanHistorySample(
-        snapshot: snapshot, controlSource: temperatureSource,
-        thermalSeverity: thermalSeverity, recordedAt: now)
-    else { return }
-
-    do {
-      try await historyStore.record(sample)
-      lastAutomaticHistorySampleAt = now
-      learningSampleCount = await historyStore.sampleCount()
-      learningErrorText = nil
-    } catch {
-      learningErrorText = error.localizedDescription
-      logger.error("fan history write failed: \(error.localizedDescription, privacy: .public)")
-    }
-  }
-
-  private func refreshLearningPrediction(
-    for snapshot: FanSnapshot, thermalSeverity: SystemThermalSeverity
-  ) async -> MacOSFanPrediction? {
-    let prediction = await historyStore.prediction(
-      for: snapshot.learningQuery(source: temperatureSource, thermalSeverity: thermalSeverity))
-    learnedMacOSTargets = prediction?.targets ?? []
-    learningConfidence = prediction?.confidence ?? 0
-    return prediction
-  }
-
   private func isPermissionDenied(_ error: Error) -> Bool {
     (error as? SMCClient.SMCError)?.isPermissionDenied == true
   }
@@ -890,13 +816,7 @@ final class FanController: ObservableObject {
     } else {
       isControlEnabled = false
       targetRPMs = []
-      if menuBarDisplayMode == .fanSpeed || menuBarDisplayMode == .temperatureAndFan
-        || menuBarDisplayMode == .temperatureFanAndBattery
-      {
-        menuBarDisplayMode = .temperature
-        UserDefaults.standard.set(
-          MenuBarDisplayMode.temperature.rawValue, forKey: Self.menuBarDisplayKey)
-      }
+      if menuBarDisplayMode.includesFan { setMenuBarComponents(fan: false) }
     }
   }
 
@@ -924,6 +844,16 @@ final class FanController: ObservableObject {
   private static func powerText(_ value: Double?) -> String {
     guard let value else { return "-- W" }
     return String(format: "%.1f W", value)
+  }
+
+  private func setMenuBarComponents(
+    temperature: Bool? = nil, fan: Bool? = nil, battery: Bool? = nil
+  ) {
+    setMenuBarDisplayMode(
+      MenuBarDisplayMode.compose(
+        temperature: temperature ?? menuBarDisplayMode.includesTemperature,
+        fan: fan ?? menuBarDisplayMode.includesFan,
+        battery: battery ?? menuBarDisplayMode.includesBattery))
   }
 
   private func applyBatteryChargeLimit() async {

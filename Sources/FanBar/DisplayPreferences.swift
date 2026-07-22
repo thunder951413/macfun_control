@@ -8,6 +8,7 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
   case temperatureAndFan
   case battery
   case temperatureAndBattery
+  case fanAndBattery
   case temperatureFanAndBattery
 
   var id: String { rawValue }
@@ -20,6 +21,7 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
     case .temperatureAndFan: "温度＋转速"
     case .battery: "电量与充电状态"
     case .temperatureAndBattery: "温度＋电量"
+    case .fanAndBattery: "转速＋电量"
     case .temperatureFanAndBattery: "温度＋转速＋电量"
     }
   }
@@ -30,8 +32,32 @@ enum MenuBarDisplayMode: String, CaseIterable, Identifiable {
       : [.iconOnly, .temperature, .battery, .temperatureAndBattery]
   }
 
+  var includesTemperature: Bool {
+    self == .temperature || self == .temperatureAndFan || self == .temperatureAndBattery
+      || self == .temperatureFanAndBattery
+  }
+
+  var includesFan: Bool {
+    self == .fanSpeed || self == .temperatureAndFan || self == .fanAndBattery
+      || self == .temperatureFanAndBattery
+  }
+
   var includesBattery: Bool {
-    self == .battery || self == .temperatureAndBattery || self == .temperatureFanAndBattery
+    self == .battery || self == .temperatureAndBattery || self == .fanAndBattery
+      || self == .temperatureFanAndBattery
+  }
+
+  static func compose(temperature: Bool, fan: Bool, battery: Bool) -> Self {
+    switch (temperature, fan, battery) {
+    case (false, false, false): .iconOnly
+    case (true, false, false): .temperature
+    case (false, true, false): .fanSpeed
+    case (true, true, false): .temperatureAndFan
+    case (false, false, true): .battery
+    case (true, false, true): .temperatureAndBattery
+    case (false, true, true): .fanAndBattery
+    case (true, true, true): .temperatureFanAndBattery
+    }
   }
 }
 
@@ -111,7 +137,8 @@ enum BatteryStatusPresentation {
 
 enum PopoverTab: String, Hashable {
   case sensors
-  case settings
+  case battery
+  case fan
 
   func preferredHeight(sensorGroupCount: Int, hasControllableFans: Bool = true) -> Double {
     switch self {
@@ -124,8 +151,10 @@ enum PopoverTab: String, Hashable {
       let baseHeight = hasControllableFans ? 518.0 : 510.0
       let minimumHeight = hasControllableFans ? 668.0 : 658.0
       return min(780, max(minimumHeight, baseHeight + Double(rows) * 68))
-    case .settings:
-      return hasControllableFans ? 700 : 590
+    case .battery:
+      return 680
+    case .fan:
+      return hasControllableFans ? 700 : 430
     }
   }
 }

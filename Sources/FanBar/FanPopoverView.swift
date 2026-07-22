@@ -1,6 +1,5 @@
 import FanBarHardware
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct FanPopoverView: View {
   @ObservedObject var controller: FanController
@@ -38,9 +37,12 @@ struct FanPopoverView: View {
         sensorTab
           .tag(PopoverTab.sensors)
           .tabItem { Label("传感器", systemImage: "thermometer.medium") }
-        settingsTab
-          .tag(PopoverTab.settings)
-          .tabItem { Label("设置", systemImage: "slider.horizontal.3") }
+        batteryTab
+          .tag(PopoverTab.battery)
+          .tabItem { Label("电池", systemImage: "battery.75percent") }
+        fanTab
+          .tag(PopoverTab.fan)
+          .tabItem { Label("风扇", systemImage: "fan") }
       }
     }
     .frame(width: 520, height: controller.preferredPopoverHeight)
@@ -53,12 +55,7 @@ struct FanPopoverView: View {
   private var sensorTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        if controller.isFanless {
-          fanlessMonitorNotice
-        } else {
-          metrics
-        }
-        powerMetrics
+        sensorSettings
         temperatureOverview
         sensorTemperatures
       }
@@ -67,17 +64,27 @@ struct FanPopoverView: View {
     }
   }
 
-  private var settingsTab: some View {
+  private var batteryTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
-        menuBarSettings
+        powerMetrics
         chargeLimitSettings
         batterySettings
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 16)
+    }
+  }
+
+  private var fanTab: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 16) {
         if controller.isFanless {
+          fanlessMonitorNotice
           fanlessSettingsNotice
         } else {
+          metrics
           controls
-          learningSettings
           curvePreview
           safetyNote
         }
@@ -250,22 +257,20 @@ struct FanPopoverView: View {
     return nil
   }
 
-  private var menuBarSettings: some View {
-    PopoverSection(title: "常规", symbol: "gearshape") {
+  private var sensorSettings: some View {
+    PopoverSection(title: "传感器设置", symbol: "thermometer.medium") {
       SettingRow(
-        title: "菜单栏显示", subtitle: "选择图标旁显示的信息", symbol: "menubar.rectangle"
+        title: "在菜单栏显示", subtitle: "显示所选传感器的主要温度", symbol: "menubar.rectangle"
       ) {
-        Picker(
-          "菜单栏显示",
-          selection: Binding(
-            get: { controller.menuBarDisplayMode },
-            set: { controller.setMenuBarDisplayMode($0) }
+        Toggle(
+          "在菜单栏显示传感器状态",
+          isOn: Binding(
+            get: { controller.showsSensorStatusInMenuBar },
+            set: { controller.setShowsSensorStatusInMenuBar($0) }
           )
-        ) {
-          ForEach(controller.availableMenuBarDisplayModes) { mode in Text(mode.label).tag(mode) }
-        }
+        )
         .labelsHidden()
-        .frame(width: 158)
+        .toggleStyle(CompactSwitchToggleStyle())
       }
       SectionDivider()
       SettingRow(
@@ -347,6 +352,20 @@ struct FanPopoverView: View {
 
   private var batterySettings: some View {
     PopoverSection(title: "电池温度", symbol: "battery.75percent") {
+      SettingRow(
+        title: "在菜单栏显示", subtitle: "显示电量和充电、暂停状态", symbol: "menubar.rectangle"
+      ) {
+        Toggle(
+          "在菜单栏显示电池状态",
+          isOn: Binding(
+            get: { controller.showsBatteryStatusInMenuBar },
+            set: { controller.setShowsBatteryStatusInMenuBar($0) }
+          )
+        )
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+      }
+      SectionDivider()
       SettingRow(
         title: "当前区域最高温", subtitle: "三个电池区域传感器中的最高值", symbol: "sensor"
       ) {
@@ -504,6 +523,20 @@ struct FanPopoverView: View {
     VStack(alignment: .leading, spacing: 12) {
       PopoverSection(title: "风扇控制", symbol: "fan") {
         SettingRow(
+          title: "在菜单栏显示", subtitle: "显示当前平均风扇转速", symbol: "menubar.rectangle"
+        ) {
+          Toggle(
+            "在菜单栏显示风扇状态",
+            isOn: Binding(
+              get: { controller.showsFanStatusInMenuBar },
+              set: { controller.setShowsFanStatusInMenuBar($0) }
+            )
+          )
+          .labelsHidden()
+          .toggleStyle(CompactSwitchToggleStyle())
+        }
+        SectionDivider()
+        SettingRow(
           title: "特权控制组件", subtitle: helperManager.state.label, symbol: "lock.shield"
         ) {
           if helperManager.isReady {
@@ -569,7 +602,7 @@ struct FanPopoverView: View {
         .accessibilityLabel("开始加速温度")
         Text(
           "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
-            + "仅当曲线明显高于 macOS 目标时介入；初期每 30 秒学习，形成历史后每 60 秒复核。温度快速上升会提前复核，90°C 时立即请求满速。"
+            + "仅当曲线明显高于 macOS 当前目标时介入；每 30 秒交还控制并复核系统需求。温度快速上升会提前复核，90°C 时立即请求满速。"
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -578,54 +611,6 @@ struct FanPopoverView: View {
       .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 10))
       .disabled(!controller.isControlEnabled)
 
-    }
-  }
-
-  private var learningSettings: some View {
-    PopoverSection(title: "macOS 曲线学习", symbol: "brain.head.profile") {
-      SettingRow(
-        title: "设备模型", subtitle: "历史按机型隔离，不采集序列号或用户名",
-        symbol: "laptopcomputer"
-      ) {
-        Text(controller.deviceModelText)
-          .font(.system(.caption, design: .monospaced))
-          .lineLimit(1)
-      }
-      SectionDivider()
-      SettingRow(
-        title: "学习状态", subtitle: controller.learningSummaryText,
-        symbol: "chart.dots.scatter"
-      ) {
-        Text(controller.learnedMacOSTargetText)
-          .font(.system(.caption, design: .rounded).monospacedDigit())
-          .lineLimit(1)
-      }
-      SectionDivider()
-      SettingRow(
-        title: "贡献机型数据", subtitle: "导出脱敏 JSON，可随后提交到代码仓库",
-        symbol: "square.and.arrow.up"
-      ) {
-        Button("导出 JSON") { exportLearningHistory() }
-          .controlSize(.mini)
-          .disabled(controller.learningSampleCount == 0)
-      }
-    }
-  }
-
-  private func exportLearningHistory() {
-    Task { @MainActor in
-      guard let export = await controller.makeLearningHistoryExport() else { return }
-      let panel = NSSavePanel()
-      panel.title = "导出 FanBar 机型学习数据"
-      panel.nameFieldStringValue = export.suggestedFilename
-      panel.allowedContentTypes = [.json]
-      panel.canCreateDirectories = true
-      guard panel.runModal() == .OK, let url = panel.url else { return }
-      do {
-        try export.data.write(to: url, options: .atomic)
-      } catch {
-        NSAlert(error: error).runModal()
-      }
     }
   }
 
