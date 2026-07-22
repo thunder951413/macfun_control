@@ -92,35 +92,18 @@ struct FanSafetyPolicyTests {
     #expect(try #require(manualTargets(decision)) == [3_400])
   }
 
-  @Test("manual control periodically yields for macOS demand audits")
-  func manualControlAuditTiming() {
-    let start = Date(timeIntervalSince1970: 100)
-    #expect(ManualControlSafety.systemDemandAuditInterval == 30)
-    #expect(
-      !ManualControlSafety.shouldAudit(
-        startedAt: nil, lastAuditAt: nil,
-        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
-        now: start.addingTimeInterval(100)))
-    #expect(
-      !ManualControlSafety.shouldAudit(
-        startedAt: start, lastAuditAt: nil,
-        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
-        now: start.addingTimeInterval(29.9)))
-    #expect(
-      ManualControlSafety.shouldAudit(
-        startedAt: start, lastAuditAt: nil,
-        temperatureRisePerSecond: 0, thermalSeverity: .nominal,
-        now: start.addingTimeInterval(30)))
-    #expect(
-      ManualControlSafety.shouldAudit(
-        startedAt: start, lastAuditAt: nil,
-        temperatureRisePerSecond: 1.1, thermalSeverity: .nominal,
-        now: start.addingTimeInterval(10)))
-    #expect(
-      ManualControlSafety.shouldAudit(
-        startedAt: start, lastAuditAt: nil,
-        temperatureRisePerSecond: 0, thermalSeverity: .serious,
-        now: start.addingTimeInterval(10)))
+  @Test("manual control keeps the takeover floor instead of its own stale SMC target")
+  func takeoverFloorReplacesManualTarget() {
+    let snapshot = FanSnapshot(
+      temperature: 55,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 2_700, reportedTargetRPM: 5_000,
+          minimumRPM: 1_350, maximumRPM: 5_777)
+      ])
+    let adjusted = snapshot.applyingSystemFloors([2_200])
+    #expect(adjusted.fans[0].reportedTargetRPM == 2_200)
+    #expect(adjusted.fans[0].activeTargetFloor == 2_700)
   }
 
   @Test("90°C requests maximum fan speed")
@@ -565,21 +548,6 @@ struct CPUTemperatureSelectionTests {
 
 @Suite("Fan service transactions", .serialized)
 struct FanServiceTests {
-  @Test("automatic demand observation retains the highest settled system target")
-  func automaticDemandObservationUsesMaximum() async throws {
-    let hardware = MockFanHardware()
-    hardware.targetReadSequences = [
-      [2_100, 2_500, 2_350, 2_300],
-      [2_200, 2_400, 2_650, 2_500],
-    ]
-    let service = FanService(hardware: hardware)
-
-    let snapshot = try await service.observeAutomaticDemand(
-      observationCount: 4, interval: .zero)
-
-    #expect(snapshot.fans.map(\.reportedTargetRPM) == [2_500, 2_650])
-  }
-
   @Test("zero-fan hardware remains available for temperature monitoring")
   func fanlessHardwareCanMonitor() async throws {
     let hardware = MockFanHardware()

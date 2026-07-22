@@ -95,34 +95,6 @@ actor FanService {
     try hardware.setBatteryChargeLimit(enabled: enabled, upperPercent: upperPercent)
   }
 
-  func observeAutomaticDemand(
-    source: CPUTemperatureSource = .package, observationCount: Int = 4,
-    interval: Duration = .milliseconds(200)
-  ) async throws -> FanSnapshot {
-    let count = max(1, observationCount)
-    var observations: [FanSnapshot] = []
-    observations.reserveCapacity(count)
-    for index in 0..<count {
-      if index > 0 { try await Task.sleep(for: interval) }
-      observations.append(try sample(source: source))
-    }
-
-    guard let latest = observations.last else { return try sample(source: source) }
-    let fans = latest.fans.map { fan in
-      let systemTarget = observations.compactMap { observation in
-        observation.fans.first(where: { $0.index == fan.index })?.reportedTargetRPM
-      }.max()
-      return FanReading(
-        index: fan.index, actualRPM: fan.actualRPM,
-        reportedTargetRPM: systemTarget,
-        minimumRPM: fan.minimumRPM, maximumRPM: fan.maximumRPM)
-    }
-    return FanSnapshot(
-      temperature: latest.temperature, hotspotTemperature: latest.hotspotTemperature,
-      hotspotSource: latest.hotspotSource, batteryTemperature: latest.batteryTemperature,
-      batterySource: latest.batterySource, power: latest.power, fans: fans)
-  }
-
   func apply(targets: [Double], snapshot: FanSnapshot) throws {
     guard targets.count == count, snapshot.fans.count == count else {
       throw FanServiceError.targetCountMismatch
@@ -200,15 +172,6 @@ actor FanService {
   }
 
   func isManual() -> Bool { !manualFans.isEmpty }
-
-  func isAutomaticControlActive() throws -> Bool {
-    guard hardware.isOpen else { return false }
-    for index in 0..<count {
-      let mode = try hardware.fanMode(fan: index)
-      if mode != 0, mode != 3 { return false }
-    }
-    return try !hardware.controlOverrideActive()
-  }
 
   func close() {
     hardware.close()

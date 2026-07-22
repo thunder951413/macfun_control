@@ -1,23 +1,6 @@
 import FanBarHardware
 import Foundation
 
-enum SystemThermalSeverity: Int, Sendable {
-  case nominal = 0
-  case fair = 1
-  case serious = 2
-  case critical = 3
-
-  static var current: Self {
-    switch ProcessInfo.processInfo.thermalState {
-    case .nominal: .nominal
-    case .fair: .fair
-    case .serious: .serious
-    case .critical: .critical
-    @unknown default: .fair
-    }
-  }
-}
-
 enum FanAccelerationProfile {
   static let range = 0.5...2.0
   static let defaultFactor = 1.0
@@ -58,26 +41,8 @@ struct FanReading: Sendable, Equatable, Identifiable {
   }
 }
 
-enum ManualControlSafety {
-  static let systemDemandAuditInterval: TimeInterval = 30
-  static let eventAuditCooldown: TimeInterval = 10
-  static let rapidTemperatureRisePerSecond = 1.0
+enum FanControlSafety {
   static let takeoverMarginRPM = 100.0
-
-  static func shouldAudit(
-    startedAt: Date?, lastAuditAt: Date?,
-    temperatureRisePerSecond: Double, thermalSeverity: SystemThermalSeverity,
-    now: Date = Date()
-  ) -> Bool {
-    guard let startedAt else { return false }
-    let reference = max(startedAt, lastAuditAt ?? .distantPast)
-    let elapsed = now.timeIntervalSince(reference)
-    let hasThermalEvent =
-      thermalSeverity.rawValue >= SystemThermalSeverity.serious.rawValue
-      || temperatureRisePerSecond >= rapidTemperatureRisePerSecond
-    if hasThermalEvent, elapsed >= eventAuditCooldown { return true }
-    return elapsed >= systemDemandAuditInterval
-  }
 }
 
 struct FanSnapshot: Sendable, Equatable {
@@ -101,6 +66,22 @@ struct FanSnapshot: Sendable, Equatable {
     self.batterySource = batterySource
     self.power = power
     self.fans = fans
+  }
+}
+
+extension FanSnapshot {
+  func applyingSystemFloors(_ floors: [Double]) -> FanSnapshot {
+    guard floors.count == fans.count else { return self }
+    let adjustedFans = fans.enumerated().map { index, fan in
+      FanReading(
+        index: fan.index, actualRPM: fan.actualRPM,
+        reportedTargetRPM: floors[index],
+        minimumRPM: fan.minimumRPM, maximumRPM: fan.maximumRPM)
+    }
+    return FanSnapshot(
+      temperature: temperature, hotspotTemperature: hotspotTemperature,
+      hotspotSource: hotspotSource, batteryTemperature: batteryTemperature,
+      batterySource: batterySource, power: power, fans: adjustedFans)
   }
 }
 
@@ -154,7 +135,7 @@ struct BatteryFanPolicy: Sendable {
     guard
       wasManual
         || zip(curveTargets, fans).contains(where: {
-          $0 >= $1.activeTargetFloor + ManualControlSafety.takeoverMarginRPM
+          $0 >= $1.activeTargetFloor + FanControlSafety.takeoverMarginRPM
         })
     else { return .automatic }
     return .manual(curveTargets)
@@ -276,7 +257,7 @@ struct FanSafetyPolicy: Sendable {
     guard
       emergency || wasManual
         || zip(targets, snapshot.fans).contains(where: {
-          $0 >= $1.activeTargetFloor + ManualControlSafety.takeoverMarginRPM
+          $0 >= $1.activeTargetFloor + FanControlSafety.takeoverMarginRPM
         })
     else { return .automatic }
     return .manual(targets)

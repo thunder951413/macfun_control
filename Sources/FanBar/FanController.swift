@@ -98,9 +98,7 @@ final class FanController: ObservableObject {
   private var didConfigureHelperForCapability = false
   private var previousExternalPowerConnected: Bool?
   private var powerConnectionNoticeTask: Task<Void, Never>?
-  private var manualControlStartedAt: Date?
-  private var lastSystemDemandAuditAt: Date?
-  private var previousRawTemperatureSample: (value: Double, date: Date)?
+  private var capturedSystemFloorRPMs: [Double] = []
 
   init(
     service: FanService = FanService(),
@@ -401,7 +399,6 @@ final class FanController: ObservableObject {
     guard source != temperatureSource else { return }
     temperatureSource = source
     temperatureFilter.reset()
-    previousRawTemperatureSample = nil
     UserDefaults.standard.set(source.rawValue, forKey: Self.temperatureSourceKey)
     Task { await refresh() }
   }
@@ -485,10 +482,6 @@ final class FanController: ObservableObject {
       helperManager.refresh()
       let rawSnapshot = try await service.sample(source: temperatureSource)
       guard !isSuspended else { return }
-      let now = Date()
-      let thermalSeverity = SystemThermalSeverity.current
-      let temperatureRisePerSecond = temperatureRise(
-        current: rawSnapshot.temperature, now: now)
       let filteredTemperature = temperatureFilter.record(rawSnapshot.temperature)
       let filteredBatteryTemperature = rawSnapshot.batteryTemperature.map {
         batteryTemperatureFilter.record($0)
@@ -550,8 +543,11 @@ final class FanController: ObservableObject {
         return
       }
 
-      var wasManual = currentlyManual
-      var decisionSnapshot = snapshot
+      let wasManual = currentlyManual
+      if !wasManual {
+        capturedSystemFloorRPMs = snapshot.fans.map(\.activeTargetFloor)
+      }
+      let decisionSnapshot = snapshot.applyingSystemFloors(capturedSystemFloorRPMs)
 
       // FanBar supplements macOS using the selected CPU source and, when
       // explicitly enabled, the battery-area curve. Other sensors remain monitoring-only.
@@ -559,30 +555,6 @@ final class FanController: ObservableObject {
       let batteryEmergency =
         isBatteryCurveEnabled
         && (rawSnapshot.batteryTemperature ?? 0) >= BatteryFanPolicy.maximumTemperature
-      if wasManual, !cpuEmergency, !batteryEmergency,
-        ManualControlSafety.shouldAudit(
-          startedAt: manualControlStartedAt, lastAuditAt: lastSystemDemandAuditAt,
-          temperatureRisePerSecond: temperatureRisePerSecond,
-          thermalSeverity: thermalSeverity, now: now)
-      {
-        logger.notice("restore requested reason=periodic-system-demand-audit")
-        try await service.restoreAutomatic()
-        setSessionActive(false)
-        lastSystemDemandAuditAt = now
-        consecutiveCoolSamples = 0
-        let observed = try await service.observeAutomaticDemand(source: temperatureSource)
-        fanReadings = observed.fans
-        let auditSnapshot = FanSnapshot(
-          temperature: snapshot.temperature,
-          hotspotTemperature: observed.hotspotTemperature,
-          hotspotSource: observed.hotspotSource,
-          batteryTemperature: snapshot.batteryTemperature,
-          batterySource: observed.batterySource,
-          power: observed.power,
-          fans: observed.fans)
-        decisionSnapshot = auditSnapshot
-        wasManual = false
-      }
       let cpuDecision = policy.decision(
         for: decisionSnapshot, threshold: thresholdCelsius, wasManual: wasManual,
         emergencyOverride: cpuEmergency, accelerationFactor: fanAccelerationFactor)
@@ -684,7 +656,6 @@ final class FanController: ObservableObject {
     isSuspended = true
     temperatureFilter.reset()
     batteryTemperatureFilter.reset()
-    previousRawTemperatureSample = nil
     timer?.invalidate()
     timer = nil
     await restoreForSafety(
@@ -702,7 +673,6 @@ final class FanController: ObservableObject {
     isSuspended = true
     temperatureFilter.reset()
     batteryTemperatureFilter.reset()
-    previousRawTemperatureSample = nil
     timer?.invalidate()
     timer = nil
     powerConnectionNoticeTask?.cancel()
@@ -762,20 +732,11 @@ final class FanController: ObservableObject {
   private func setSessionActive(_ active: Bool) {
     // needsRecovery represents a session inherited from a previous process.
     // The current process tracks live ownership through FanService.manualFans.
-    if active, manualControlStartedAt == nil { manualControlStartedAt = Date() }
     if !active {
       needsRecovery = false
-      manualControlStartedAt = nil
+      capturedSystemFloorRPMs = []
     }
     UserDefaults.standard.set(active, forKey: Self.activeSessionKey)
-  }
-
-  private func temperatureRise(current: Double, now: Date) -> Double {
-    defer { previousRawTemperatureSample = (current, now) }
-    guard let previous = previousRawTemperatureSample else { return 0 }
-    let elapsed = now.timeIntervalSince(previous.date)
-    guard elapsed > 0 else { return 0 }
-    return max(0, (current - previous.value) / elapsed)
   }
 
   private func isPermissionDenied(_ error: Error) -> Bool {

@@ -602,7 +602,7 @@ struct FanPopoverView: View {
         .accessibilityLabel("开始加速温度")
         Text(
           "设为 40°C 可在轻中负载时更早持续散热。FanBar 只依据所选温度来源补充 macOS 控制；"
-            + "仅当曲线明显高于 macOS 当前目标时介入；每 30 秒交还控制并复核系统需求。温度快速上升会提前复核，90°C 时立即请求满速。"
+            + "介入后会连续执行平滑曲线，不再定时切回自动控制；低于退出温度、关闭功能、睡眠、退出或发生异常时才交还 macOS。90°C 时立即请求满速。"
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -645,7 +645,7 @@ struct FanPopoverView: View {
       Image(systemName: "shield.checkered")
         .foregroundStyle(.green)
         .frame(width: 18)
-      Text("目标转速绝不会低于 macOS 当前目标或实际转速；传感器或控制异常时会恢复系统自动控制。")
+      Text("介入时记录 macOS 的目标下限；连续控制期间不会定时切回自动模式。目标不低于该下限或实际转速，异常时恢复系统控制。")
         .fixedSize(horizontal: false, vertical: true)
     }
     .font(.caption)
