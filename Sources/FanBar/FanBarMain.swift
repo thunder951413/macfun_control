@@ -125,7 +125,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         power: controller.currentPower,
         accessibilityDescription: "电池状态")
       attachment.image = accessory
-      let width = controller.batteryMenuBarStyle == .iOSNative ? 31.0 : 19.0
+      let width: CGFloat =
+        switch controller.batteryMenuBarStyle {
+        case .macOSColored: 30
+        case .iOSNative: 31
+        case .fanBarStatus, .macOSNative: 19
+        }
       attachment.bounds = NSRect(x: 0, y: -2, width: width, height: 14)
       attributedTitle.append(NSAttributedString(attachment: attachment))
       if !controller.menuBarBatteryText.isEmpty {

@@ -164,7 +164,7 @@ enum BatteryMenuBarStyle: String, CaseIterable, Identifiable {
     switch self {
     case .fanBarStatus: "用符号直接区分充电、暂停与满电"
     case .macOSNative: "跟随菜单栏前景色的系统电池"
-    case .macOSColored: "用绿、黄、红显示电池状态"
+    case .macOSColored: "白色原生外框与蓝色电量填充"
     case .iOSNative: "电量数字嵌入紧凑电池图形"
     }
   }

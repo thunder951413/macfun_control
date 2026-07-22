@@ -1,3 +1,4 @@
+import AppKit
 import FanBarHardware
 import Foundation
 import Testing
@@ -684,6 +685,7 @@ struct MenuBarDisplayModeTests {
     let native = BatteryMenuBarImageRenderer.image(
       style: .macOSNative, power: hardware.power, accessibilityDescription: "电池状态")
     #expect(!colored.isTemplate)
+    #expect(colored.size == NSSize(width: 30, height: 14))
     #expect(native.isTemplate)
     _ = await controller.shutdown()
   }

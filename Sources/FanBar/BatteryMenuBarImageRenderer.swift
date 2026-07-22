@@ -12,12 +12,10 @@ enum BatteryMenuBarImageRenderer {
     case .fanBarStatus, .macOSNative:
       return systemBatteryImage(
         power: power,
-        color: nil,
         accessibilityDescription: accessibilityDescription)
     case .macOSColored:
-      return systemBatteryImage(
+      return blueBatteryImage(
         power: power,
-        color: coloredStatusColor(for: power),
         accessibilityDescription: accessibilityDescription)
     case .iOSNative:
       return compactBatteryImage(
@@ -28,7 +26,6 @@ enum BatteryMenuBarImageRenderer {
 
   private static func systemBatteryImage(
     power: PowerReading?,
-    color: NSColor?,
     accessibilityDescription: String
   ) -> NSImage {
     let symbolName = BatteryStatusPresentation.symbolName(for: power)
@@ -37,15 +34,61 @@ enum BatteryMenuBarImageRenderer {
       ?? NSImage(
         systemSymbolName: "battery.0percent", accessibilityDescription: accessibilityDescription)!
     let pointConfiguration = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
-    let image: NSImage
-    if let color {
-      let palette = NSImage.SymbolConfiguration(paletteColors: [color])
-      image = base.withSymbolConfiguration(pointConfiguration.applying(palette)) ?? base
-      image.isTemplate = false
-    } else {
-      image = base.withSymbolConfiguration(pointConfiguration) ?? base
-      image.isTemplate = true
+    let image = base.withSymbolConfiguration(pointConfiguration) ?? base
+    image.isTemplate = true
+    image.accessibilityDescription = accessibilityDescription
+    return image
+  }
+
+  /// A native-proportioned battery with a fixed white shell and blue charge level.
+  /// This is deliberately non-template artwork so AppKit does not replace either color.
+  private static func blueBatteryImage(
+    power: PowerReading?,
+    accessibilityDescription: String
+  ) -> NSImage {
+    let size = NSSize(width: 30, height: 14)
+    let image = NSImage(size: size, flipped: false) { _ in
+      let level = CGFloat(min(100, max(0, power?.batteryLevelPercent ?? 0))) / 100
+      let bodyRect = NSRect(x: 0.75, y: 1.25, width: 26, height: 11.5)
+      let body = NSBezierPath(roundedRect: bodyRect, xRadius: 3.1, yRadius: 3.1)
+      NSColor.white.setStroke()
+      body.lineWidth = 1.35
+      body.stroke()
+
+      // Keep a consistent inset like the system battery rather than tinting the entire symbol.
+      let innerRect = bodyRect.insetBy(dx: 2, dy: 2)
+      let fillWidth = innerRect.width * level
+      if fillWidth > 0 {
+        let fillRect = NSRect(
+          x: innerRect.minX, y: innerRect.minY,
+          width: fillWidth, height: innerRect.height)
+        NSColor.systemBlue.setFill()
+        NSBezierPath(roundedRect: fillRect, xRadius: 1.5, yRadius: 1.5).fill()
+      }
+
+      let terminal = NSBezierPath(
+        roundedRect: NSRect(x: 27.55, y: 4.25, width: 1.7, height: 5.5),
+        xRadius: 0.85,
+        yRadius: 0.85)
+      NSColor.white.setFill()
+      terminal.fill()
+
+      if power?.isBatteryCharging == true,
+        let bolt = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: nil)
+      {
+        let configuration = NSImage.SymbolConfiguration(
+          paletteColors: [.white]
+        ).applying(NSImage.SymbolConfiguration(pointSize: 8, weight: .bold))
+        let configuredBolt = bolt.withSymbolConfiguration(configuration) ?? bolt
+        configuredBolt.draw(
+          in: NSRect(x: 10.5, y: 2.5, width: 7, height: 9),
+          from: .zero,
+          operation: .sourceOver,
+          fraction: 1)
+      }
+      return true
     }
+    image.isTemplate = false
     image.accessibilityDescription = accessibilityDescription
     return image
   }
@@ -95,13 +138,6 @@ enum BatteryMenuBarImageRenderer {
     image.isTemplate = false
     image.accessibilityDescription = accessibilityDescription
     return image
-  }
-
-  private static func coloredStatusColor(for power: PowerReading?) -> NSColor {
-    guard let level = power?.batteryLevelPercent else { return .secondaryLabelColor }
-    if level <= 10 { return .systemRed }
-    if level <= 20 { return .systemYellow }
-    return .systemGreen
   }
 
   private static func nativeStatusColor(for power: PowerReading?) -> NSColor {

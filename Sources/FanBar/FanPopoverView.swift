@@ -905,13 +905,35 @@ private struct BatteryMenuBarPreview: View {
     if power?.isBatteryCharging == true || power?.isBatteryFullyCharged == true { return .green }
     if level <= 10 { return .red }
     if level <= 20 { return .yellow }
-    if style == .macOSColored { return .green }
     return .primary
   }
 
   var body: some View {
     Group {
-      if style == .iOSNative {
+      if style == .macOSColored {
+        HStack(spacing: 1) {
+          ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3)
+              .stroke(Color.white, lineWidth: 1.3)
+            GeometryReader { geometry in
+              RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color(nsColor: .systemBlue))
+                .frame(width: max(0, (geometry.size.width - 4) * CGFloat(level) / 100))
+                .padding(2)
+            }
+            if power?.isBatteryCharging == true {
+              Image(systemName: "bolt.fill")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+          }
+          .frame(width: 27, height: 14)
+          Capsule()
+            .fill(Color.white)
+            .frame(width: 2, height: 6)
+        }
+      } else if style == .iOSNative {
         ZStack {
           RoundedRectangle(cornerRadius: 3)
             .stroke(color, lineWidth: 1.2)
@@ -928,8 +950,8 @@ private struct BatteryMenuBarPreview: View {
         .frame(width: 29, height: 14)
       } else {
         Image(systemName: BatteryStatusPresentation.symbolName(for: power))
-          .symbolRenderingMode(style == .macOSColored ? .monochrome : .hierarchical)
-          .foregroundStyle(style == .macOSColored ? color : .primary)
+          .symbolRenderingMode(.hierarchical)
+          .foregroundStyle(.primary)
           .frame(width: 29, height: 18)
       }
     }
