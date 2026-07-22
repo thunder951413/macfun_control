@@ -105,15 +105,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func updateStatusItem() {
     guard let button = statusItem?.button else { return }
     let description = controller.menuBarAccessibilityDescription
-    let image =
-      NSImage(
-        systemSymbolName: controller.menuBarSymbolName,
-        accessibilityDescription: description)
-      ?? NSImage(systemSymbolName: "thermometer.medium", accessibilityDescription: description)
-    image?.isTemplate = true
-    button.image = image
+    button.image = primaryMenuBarImage(accessibilityDescription: description)
     let normalText = controller.menuBarText
     let attributedTitle = NSMutableAttributedString()
+    if controller.showsBatteryAccessoryMenuBarIcon {
+      let attachment = NSTextAttachment()
+      let accessory = BatteryMenuBarImageRenderer.image(
+        style: controller.batteryMenuBarStyle,
+        power: controller.currentPower,
+        accessibilityDescription: "电池状态")
+      attachment.image = accessory
+      let width = controller.batteryMenuBarStyle == .iOSNative ? 30.0 : 17.0
+      attachment.bounds = NSRect(x: 0, y: -2, width: width, height: 14)
+      attributedTitle.append(NSAttributedString(attachment: attachment))
+      if !normalText.isEmpty { attributedTitle.append(NSAttributedString(string: " ")) }
+    }
     if !normalText.isEmpty {
       attributedTitle.append(
         NSAttributedString(
@@ -141,6 +147,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       "FanBar · CPU \(controller.temperatureText) · 电池区域 \(controller.batteryTemperatureText)\(fanDetails)"
       + (controller.menuBarHotspotAlertText.map { " · \($0)" } ?? "")
       + (controller.menuBarBatteryAlertText.map { " · \($0)" } ?? "")
+  }
+
+  private func primaryMenuBarImage(accessibilityDescription: String) -> NSImage? {
+    if controller.usesBatteryAsPrimaryMenuBarIcon {
+      return BatteryMenuBarImageRenderer.image(
+        style: controller.batteryMenuBarStyle,
+        power: controller.currentPower,
+        accessibilityDescription: accessibilityDescription)
+    }
+    let image =
+      NSImage(
+        systemSymbolName: controller.menuBarSymbolName,
+        accessibilityDescription: accessibilityDescription)
+      ?? NSImage(
+        systemSymbolName: "thermometer.medium",
+        accessibilityDescription: accessibilityDescription)
+    image?.isTemplate = true
+    return image
   }
 
   private func updatePopoverSize() {

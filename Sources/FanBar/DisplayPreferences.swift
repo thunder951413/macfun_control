@@ -119,8 +119,14 @@ enum PowerConnectionNotice {
 }
 
 enum BatteryStatusPresentation {
-  static func text(for power: PowerReading?) -> String {
+  static func text(
+    for power: PowerReading?,
+    style: BatteryMenuBarStyle = .fanBarStatus,
+    showsPercentage: Bool = true
+  ) -> String {
+    guard showsPercentage, style != .iOSNative else { return "" }
     guard let level = power?.batteryLevelPercent else { return "--%" }
+    guard style == .fanBarStatus else { return "\(level)%" }
     if power?.isBatteryCharging == true { return "\(level)% ⚡︎" }
     if power?.isBatteryFullyCharged == true { return "\(level)% ✓" }
     if power?.isExternalPowerConnected == true { return "\(level)% ⏸" }
@@ -133,6 +139,37 @@ enum BatteryStatusPresentation {
     let base = "battery.\(bucket)percent"
     return power?.isBatteryCharging == true ? "battery.100percent.bolt" : base
   }
+}
+
+/// Battery menu-bar treatments aligned with the four current AlDente families.
+/// FanBar draws its own artwork and does not reuse AlDente's proprietary assets.
+enum BatteryMenuBarStyle: String, CaseIterable, Identifiable {
+  case fanBarStatus
+  case macOSNative
+  case macOSColored
+  case iOSNative
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .fanBarStatus: "FanBar 状态"
+    case .macOSNative: "macOS 原生"
+    case .macOSColored: "macOS 彩色"
+    case .iOSNative: "iOS 原生"
+    }
+  }
+
+  var detail: String {
+    switch self {
+    case .fanBarStatus: "用符号直接区分充电、暂停与满电"
+    case .macOSNative: "跟随菜单栏前景色的系统电池"
+    case .macOSColored: "用绿、黄、红显示电池状态"
+    case .iOSNative: "电量数字嵌入紧凑电池图形"
+    }
+  }
+
+  var embedsPercentage: Bool { self == .iOSNative }
 }
 
 enum PopoverTab: String, Hashable {
@@ -152,7 +189,7 @@ enum PopoverTab: String, Hashable {
       let minimumHeight = hasControllableFans ? 668.0 : 658.0
       return min(780, max(minimumHeight, baseHeight + Double(rows) * 68))
     case .battery:
-      return 680
+      return 760
     case .fan:
       return hasControllableFans ? 700 : 430
     }

@@ -349,7 +349,7 @@ struct MenuBarDisplayModeTests {
     #expect(
       PopoverTab.sensors.preferredHeight(
         sensorGroupCount: 2, hasControllableFans: false) == 658)
-    #expect(PopoverTab.battery.preferredHeight(sensorGroupCount: 0) == 680)
+    #expect(PopoverTab.battery.preferredHeight(sensorGroupCount: 0) == 760)
     #expect(PopoverTab.fan.preferredHeight(sensorGroupCount: 0) == 700)
     #expect(PopoverTab.fan.preferredHeight(sensorGroupCount: 0, hasControllableFans: false) == 430)
     #expect(PopoverSizing.height(preferred: 628, visibleScreenHeight: 900) == 628)
@@ -443,6 +443,29 @@ struct MenuBarDisplayModeTests {
       isExternalPowerConnected: false, isBatteryCharging: false, batteryLevelPercent: 63,
       inputCapacityWatts: nil, systemPowerWatts: 12, batteryChargingPowerWatts: nil)
     #expect(BatteryStatusPresentation.text(for: battery) == "63%")
+    #expect(
+      BatteryStatusPresentation.text(
+        for: charging, style: .macOSNative, showsPercentage: true) == "74%")
+    #expect(
+      BatteryStatusPresentation.text(
+        for: charging, style: .iOSNative, showsPercentage: true
+      ).isEmpty)
+    #expect(
+      BatteryStatusPresentation.text(
+        for: charging, style: .fanBarStatus, showsPercentage: false
+      ).isEmpty)
+  }
+
+  @Test("all AlDente-inspired battery styles have stable persisted values")
+  func batteryMenuBarStyles() {
+    #expect(BatteryMenuBarStyle.allCases.count == 4)
+    for style in BatteryMenuBarStyle.allCases {
+      #expect(BatteryMenuBarStyle(rawValue: style.rawValue) == style)
+      #expect(!style.label.isEmpty)
+      #expect(!style.detail.isEmpty)
+    }
+    #expect(BatteryMenuBarStyle.iOSNative.embedsPercentage)
+    #expect(!BatteryMenuBarStyle.macOSColored.embedsPercentage)
   }
 
   @Test("fanless controller can use battery-only menu bar status")

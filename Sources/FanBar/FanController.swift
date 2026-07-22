@@ -53,6 +53,9 @@ final class FanController: ObservableObject {
   @Published private(set) var state: ControlState = .starting
   @Published private(set) var statusText = "正在连接 AppleSMC…"
   @Published private(set) var menuBarDisplayMode: MenuBarDisplayMode
+  @Published private(set) var batteryMenuBarStyle: BatteryMenuBarStyle
+  @Published private(set) var showsBatteryIconInMenuBar: Bool
+  @Published private(set) var showsBatteryPercentageInMenuBar: Bool
   @Published private(set) var showsHotspotMenuAlert: Bool
   @Published private(set) var showsBatteryMenuAlert: Bool
   @Published private(set) var batteryAlertThreshold: Double
@@ -71,6 +74,9 @@ final class FanController: ObservableObject {
   private static let enabledKey = "controlEnabled"
   private static let activeSessionKey = "ownsActiveManualSession"
   private static let menuBarDisplayKey = "menuBarDisplayMode"
+  private static let batteryMenuBarStyleKey = "batteryMenuBarStyle"
+  private static let batteryMenuBarIconKey = "showsBatteryIconInMenuBar"
+  private static let batteryMenuBarPercentageKey = "showsBatteryPercentageInMenuBar"
   private static let hotspotMenuAlertKey = "showsHotspotMenuAlert"
   private static let batteryMenuAlertKey = "showsBatteryMenuAlert"
   private static let batteryAlertThresholdKey = "batteryAlertThreshold"
@@ -133,6 +139,13 @@ final class FanController: ObservableObject {
     menuBarDisplayMode =
       MenuBarDisplayMode(
         rawValue: defaults.string(forKey: Self.menuBarDisplayKey) ?? "") ?? .temperature
+    batteryMenuBarStyle =
+      BatteryMenuBarStyle(
+        rawValue: defaults.string(forKey: Self.batteryMenuBarStyleKey) ?? "") ?? .fanBarStatus
+    showsBatteryIconInMenuBar =
+      defaults.object(forKey: Self.batteryMenuBarIconKey) as? Bool ?? true
+    showsBatteryPercentageInMenuBar =
+      defaults.object(forKey: Self.batteryMenuBarPercentageKey) as? Bool ?? true
     showsHotspotMenuAlert = defaults.object(forKey: Self.hotspotMenuAlertKey) as? Bool ?? true
     showsBatteryMenuAlert = defaults.object(forKey: Self.batteryMenuAlertKey) as? Bool ?? true
     let savedBatteryAlertThreshold =
@@ -243,28 +256,15 @@ final class FanController: ObservableObject {
       averageRPM.map { value in
         value >= 1_000 ? String(format: "%.1fk", value / 1_000) : "\(Int(value.rounded()))"
       } ?? "--"
-    let battery = BatteryStatusPresentation.text(for: currentPower)
-    let effectiveMode: MenuBarDisplayMode =
-      if hasControllableFans {
-        menuBarDisplayMode
-      } else {
-        switch menuBarDisplayMode {
-        case .fanSpeed, .temperatureAndFan: .temperature
-        case .fanAndBattery: .battery
-        case .temperatureFanAndBattery: .temperatureAndBattery
-        default: menuBarDisplayMode
-        }
-      }
-    return switch effectiveMode {
-    case .iconOnly: ""
-    case .temperature: temperature
-    case .fanSpeed: rpm
-    case .temperatureAndFan: "\(temperature)  \(rpm)"
-    case .battery: battery
-    case .temperatureAndBattery: "\(temperature)  \(battery)"
-    case .fanAndBattery: "\(rpm)  \(battery)"
-    case .temperatureFanAndBattery: "\(temperature)  \(rpm)  \(battery)"
-    }
+    let battery = BatteryStatusPresentation.text(
+      for: currentPower,
+      style: batteryMenuBarStyle,
+      showsPercentage: showsBatteryPercentageInMenuBar)
+    var components: [String] = []
+    if effectiveMenuBarDisplayMode.includesTemperature { components.append(temperature) }
+    if effectiveMenuBarDisplayMode.includesFan { components.append(rpm) }
+    if effectiveMenuBarDisplayMode.includesBattery, !battery.isEmpty { components.append(battery) }
+    return components.joined(separator: "  ")
   }
 
   var hasControllableFans: Bool { fanCapability == .available }
@@ -274,9 +274,32 @@ final class FanController: ObservableObject {
     MenuBarDisplayMode.available(hasControllableFans: !isFanless)
   }
 
+  var effectiveMenuBarDisplayMode: MenuBarDisplayMode {
+    if hasControllableFans { return menuBarDisplayMode }
+    return switch menuBarDisplayMode {
+    case .fanSpeed, .temperatureAndFan: .temperature
+    case .fanAndBattery: .battery
+    case .temperatureFanAndBattery: .temperatureAndBattery
+    default: menuBarDisplayMode
+    }
+  }
+
+  var usesBatteryAsPrimaryMenuBarIcon: Bool {
+    menuBarPowerConnectionText == nil
+      && effectiveMenuBarDisplayMode == .battery
+      && (showsBatteryIconInMenuBar || batteryMenuBarStyle.embedsPercentage)
+  }
+
+  var showsBatteryAccessoryMenuBarIcon: Bool {
+    menuBarPowerConnectionText == nil
+      && effectiveMenuBarDisplayMode.includesBattery
+      && effectiveMenuBarDisplayMode != .battery
+      && (showsBatteryIconInMenuBar || batteryMenuBarStyle.embedsPercentage)
+  }
+
   var menuBarSymbolName: String {
     if menuBarPowerConnectionText != nil { return "powerplug.fill" }
-    if menuBarDisplayMode == .battery {
+    if usesBatteryAsPrimaryMenuBarIcon {
       return BatteryStatusPresentation.symbolName(for: currentPower)
     }
     return MenuBarPresentation.symbolName(state: state, hasControllableFans: !isFanless)
@@ -336,6 +359,33 @@ final class FanController: ObservableObject {
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
     menuBarDisplayMode = mode
     UserDefaults.standard.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
+  }
+
+  func setBatteryMenuBarStyle(_ style: BatteryMenuBarStyle) {
+    batteryMenuBarStyle = style
+    if style.embedsPercentage { showsBatteryIconInMenuBar = true }
+    UserDefaults.standard.set(style.rawValue, forKey: Self.batteryMenuBarStyleKey)
+    UserDefaults.standard.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
+  }
+
+  func setShowsBatteryIconInMenuBar(_ enabled: Bool) {
+    showsBatteryIconInMenuBar = batteryMenuBarStyle.embedsPercentage ? true : enabled
+    if !showsBatteryIconInMenuBar && !showsBatteryPercentageInMenuBar {
+      showsBatteryPercentageInMenuBar = true
+      UserDefaults.standard.set(true, forKey: Self.batteryMenuBarPercentageKey)
+    }
+    UserDefaults.standard.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
+  }
+
+  func setShowsBatteryPercentageInMenuBar(_ enabled: Bool) {
+    guard !batteryMenuBarStyle.embedsPercentage else { return }
+    showsBatteryPercentageInMenuBar = enabled
+    if !showsBatteryPercentageInMenuBar && !showsBatteryIconInMenuBar {
+      showsBatteryIconInMenuBar = true
+      UserDefaults.standard.set(true, forKey: Self.batteryMenuBarIconKey)
+    }
+    UserDefaults.standard.set(
+      showsBatteryPercentageInMenuBar, forKey: Self.batteryMenuBarPercentageKey)
   }
 
   var showsSensorStatusInMenuBar: Bool { menuBarDisplayMode.includesTemperature }

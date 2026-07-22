@@ -367,6 +367,62 @@ struct FanPopoverView: View {
       }
       SectionDivider()
       SettingRow(
+        title: "电池显示样式", subtitle: controller.batteryMenuBarStyle.detail,
+        symbol: "paintpalette"
+      ) {
+        HStack(spacing: 7) {
+          BatteryMenuBarPreview(
+            style: controller.batteryMenuBarStyle,
+            power: controller.currentPower)
+          Picker(
+            "电池显示样式",
+            selection: Binding(
+              get: { controller.batteryMenuBarStyle },
+              set: { controller.setBatteryMenuBarStyle($0) }
+            )
+          ) {
+            ForEach(BatteryMenuBarStyle.allCases) { style in
+              Text(style.label).tag(style)
+            }
+          }
+          .labelsHidden()
+        }
+      }
+      .disabled(!controller.showsBatteryStatusInMenuBar)
+      SectionDivider()
+      SettingRow(
+        title: "显示内容",
+        subtitle: controller.batteryMenuBarStyle.embedsPercentage
+          ? "iOS 样式将电量数字嵌入图标" : "图标与电量百分比可独立显示",
+        symbol: "textformat.size"
+      ) {
+        HStack(spacing: 12) {
+          LabeledCompactToggle(
+            title: "图标",
+            isOn: Binding(
+              get: { controller.showsBatteryIconInMenuBar },
+              set: { controller.setShowsBatteryIconInMenuBar($0) }
+            )
+          )
+          .disabled(controller.batteryMenuBarStyle.embedsPercentage)
+          if controller.batteryMenuBarStyle.embedsPercentage {
+            Text("电量内嵌")
+              .font(.caption2)
+              .foregroundStyle(.secondary)
+          } else {
+            LabeledCompactToggle(
+              title: "百分比",
+              isOn: Binding(
+                get: { controller.showsBatteryPercentageInMenuBar },
+                set: { controller.setShowsBatteryPercentageInMenuBar($0) }
+              )
+            )
+          }
+        }
+      }
+      .disabled(!controller.showsBatteryStatusInMenuBar)
+      SectionDivider()
+      SettingRow(
         title: "当前区域最高温", subtitle: "三个电池区域传感器中的最高值", symbol: "sensor"
       ) {
         Text(controller.batteryTemperatureText)
@@ -823,6 +879,60 @@ private struct CompactSwitchToggleStyle: ToggleStyle {
         }
     }
     .buttonStyle(.plain)
+  }
+}
+
+private struct LabeledCompactToggle: View {
+  let title: String
+  @Binding var isOn: Bool
+
+  var body: some View {
+    VStack(spacing: 3) {
+      Text(title).font(.caption2).foregroundStyle(.secondary)
+      Toggle(title, isOn: $isOn)
+        .labelsHidden()
+        .toggleStyle(CompactSwitchToggleStyle())
+    }
+  }
+}
+
+private struct BatteryMenuBarPreview: View {
+  let style: BatteryMenuBarStyle
+  let power: PowerReading?
+
+  private var level: Int { power?.batteryLevelPercent ?? 74 }
+  private var color: Color {
+    if power?.isBatteryCharging == true || power?.isBatteryFullyCharged == true { return .green }
+    if level <= 10 { return .red }
+    if level <= 20 { return .yellow }
+    return .primary
+  }
+
+  var body: some View {
+    Group {
+      if style == .iOSNative {
+        ZStack {
+          RoundedRectangle(cornerRadius: 3)
+            .stroke(color, lineWidth: 1.2)
+          GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 1.5)
+              .fill(color)
+              .frame(width: max(1, (geometry.size.width - 4) * CGFloat(level) / 100))
+              .padding(2)
+          }
+          Text("\(level)")
+            .font(.system(size: 7, weight: .bold, design: .rounded))
+            .foregroundStyle(level >= 48 ? Color(nsColor: .controlBackgroundColor) : color)
+        }
+        .frame(width: 29, height: 14)
+      } else {
+        Image(systemName: BatteryStatusPresentation.symbolName(for: power))
+          .symbolRenderingMode(style == .macOSColored ? .monochrome : .hierarchical)
+          .foregroundStyle(style == .macOSColored ? color : .primary)
+          .frame(width: 29, height: 18)
+      }
+    }
+    .frame(width: 32)
   }
 }
 
