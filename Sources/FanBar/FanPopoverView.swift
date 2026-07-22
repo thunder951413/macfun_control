@@ -55,9 +55,9 @@ struct FanPopoverView: View {
   private var sensorTab: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        sensorSettings
         temperatureOverview
         sensorTemperatures
+        sensorSettings
       }
       .padding(.horizontal, 20)
       .padding(.vertical, 16)
