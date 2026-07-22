@@ -22,11 +22,15 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   var sensorReadings: [TemperatureReading] = []
   var hotspotReading = TemperatureReading(key: "TCMz", value: 70)
   var power: PowerReading?
+  var failTemperatureRead = false
 
   func open() throws { isOpen = true }
   func close() { isOpen = false }
   func fanCount() throws -> Int { count }
-  func cpuTemperature() throws -> Double { temperature }
+  func cpuTemperature() throws -> Double {
+    if failTemperatureRead { throw TestError.injected }
+    return temperature
+  }
   func cpuHotspotReading() throws -> TemperatureReading { hotspotReading }
   func allTemperatureReadings() -> [TemperatureReading] { sensorReadings }
   func powerReading() -> PowerReading? { power }
@@ -59,17 +63,27 @@ final class MockFanHardware: FanHardware, @unchecked Sendable {
   enum TestError: Error { case injected }
 }
 
+private func testPreferences() -> UserDefaults {
+  let suite = "local.fanbar.tests.\(UUID().uuidString)"
+  let preferences = UserDefaults(suiteName: suite)!
+  preferences.removePersistentDomain(forName: suite)
+  return preferences
+}
+
 @Suite("Fan safety policy")
 struct FanSafetyPolicyTests {
   private let policy = FanSafetyPolicy()
 
-  @Test("manual control never reduces existing speed")
-  func neverReducesExistingSpeed() throws {
-    let fan = FanReading(index: 0, actualRPM: 5_000, minimumRPM: 1_800, maximumRPM: 6_500)
+  @Test("manual policy can descend from actual speed while preserving the captured system floor")
+  func manualPolicyAllowsCurveDescent() throws {
+    let fan = FanReading(
+      index: 0, actualRPM: 5_000, reportedTargetRPM: 3_000,
+      minimumRPM: 1_800, maximumRPM: 6_500)
     let snapshot = FanSnapshot(temperature: 69, fans: [fan])
     let decision = policy.decision(for: snapshot, threshold: 68, wasManual: true)
     let targets = try #require(manualTargets(decision))
-    #expect(abs(targets[0] - 5_000) < 0.01)
+    #expect(targets == [3_000])
+    #expect(targets[0] < fan.actualRPM)
   }
 
   @Test("a higher macOS target prevents FanBar from taking control")
@@ -82,8 +96,8 @@ struct FanSafetyPolicyTests {
     #expect(decision == .automatic)
   }
 
-  @Test("a manual session never lowers its previous target")
-  func manualTargetIsMonotonic() throws {
+  @Test("a manual session preserves its captured macOS target floor")
+  func manualTargetPreservesSystemFloor() throws {
     let fan = FanReading(
       index: 0, actualRPM: 2_700, reportedTargetRPM: 3_400, minimumRPM: 1_350,
       maximumRPM: 5_777)
@@ -264,6 +278,182 @@ struct FanSafetyPolicyTests {
   }
 }
 
+@Suite("Fan control loop")
+struct FanControlLoopTests {
+  private let configuration = FanControlLoop.Configuration(
+    cpuThreshold: 68, batteryCurveEnabled: false, batteryThreshold: 38,
+    accelerationFactor: 1, interval: 2)
+
+  @Test("manual sessions descend through the asymmetric limiter without crossing system floor")
+  func manualSessionDescendsSmoothly() throws {
+    var loop = FanControlLoop()
+    let entry = FanSnapshot(
+      temperature: 80,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 2_000, reportedTargetRPM: 2_000, mode: 0,
+          minimumRPM: 1_500, maximumRPM: 6_000)
+      ])
+    guard
+      case .manual = loop.evaluate(
+        snapshot: entry, rawCPUTemperature: 80, rawBatteryTemperature: nil,
+        configuration: configuration, wasManual: false, previousTargets: [])
+    else {
+      Issue.record("expected initial takeover")
+      return
+    }
+
+    let cooling = FanSnapshot(
+      temperature: 75,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 5_000, reportedTargetRPM: 5_000, mode: 1,
+          minimumRPM: 1_500, maximumRPM: 6_000)
+      ])
+    guard
+      case .manual(let command) = loop.evaluate(
+        snapshot: cooling, rawCPUTemperature: 75, rawBatteryTemperature: nil,
+        configuration: configuration, wasManual: true, previousTargets: [5_000])
+    else {
+      Issue.record("expected continued manual control")
+      return
+    }
+    #expect(command.desiredTargets[0] < 5_000)
+    #expect(command.limitedTargets == [4_800])
+    #expect(command.limitedTargets[0] >= 2_000)
+  }
+
+  @Test("three cool samples are required before release")
+  func cooldownConfirmation() {
+    var loop = FanControlLoop()
+    let entry = FanSnapshot(
+      temperature: 80,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 2_000, reportedTargetRPM: 2_000, mode: 0,
+          minimumRPM: 1_500, maximumRPM: 6_000)
+      ])
+    _ = loop.evaluate(
+      snapshot: entry, rawCPUTemperature: 80, rawBatteryTemperature: nil,
+      configuration: configuration, wasManual: false, previousTargets: [])
+    let cool = FanSnapshot(
+      temperature: 60,
+      fans: [
+        FanReading(
+          index: 0, actualRPM: 2_500, reportedTargetRPM: 2_500, mode: 1,
+          minimumRPM: 1_500, maximumRPM: 6_000)
+      ])
+    #expect(
+      loop.evaluate(
+        snapshot: cool, rawCPUTemperature: 60, rawBatteryTemperature: nil,
+        configuration: configuration, wasManual: true, previousTargets: [2_500])
+        == .confirmingCooldown(sampleCount: 1))
+    #expect(
+      loop.evaluate(
+        snapshot: cool, rawCPUTemperature: 60, rawBatteryTemperature: nil,
+        configuration: configuration, wasManual: true, previousTargets: [2_500])
+        == .confirmingCooldown(sampleCount: 2))
+    #expect(
+      loop.evaluate(
+        snapshot: cool, rawCPUTemperature: 60, rawBatteryTemperature: nil,
+        configuration: configuration, wasManual: true, previousTargets: [2_500])
+        == .releaseToAutomatic)
+  }
+}
+
+@Suite("Fan controller state machine", .serialized)
+struct FanControllerStateMachineTests {
+  @Test("controller transitions through starting, manual, automatic, and suspended")
+  @MainActor
+  func lifecycleTransitions() async {
+    let hardware = MockFanHardware()
+    hardware.temperature = 80
+    hardware.targets = hardware.actual
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences(), controlEnabledOverride: true)
+    #expect(controller.state == .starting)
+
+    await controller.refresh()
+    #expect(controller.state == .manual)
+    #expect(hardware.modes == [1, 1])
+
+    hardware.temperature = 60
+    for _ in 0..<4 {
+      hardware.actual = hardware.targets
+      await controller.refresh()
+    }
+    #expect(controller.state == .automatic)
+    #expect(hardware.modes == [0, 0])
+
+    await controller.suspend()
+    #expect(controller.state == .suspended)
+    #expect(hardware.modes == [0, 0])
+  }
+
+  @Test("controller enters monitoring when control is disabled and error on sampling failure")
+  @MainActor
+  func monitoringAndErrorStates() async {
+    let monitoringHardware = MockFanHardware()
+    let monitoring = FanController(
+      service: FanService(hardware: monitoringHardware), pollInterval: 3_600,
+      preferences: testPreferences(), controlEnabledOverride: false)
+    await monitoring.refresh()
+    #expect(monitoring.state == .monitoring)
+
+    let failingHardware = MockFanHardware()
+    failingHardware.failTemperatureRead = true
+    let failing = FanController(
+      service: FanService(hardware: failingHardware), pollInterval: 3_600,
+      preferences: testPreferences(), controlEnabledOverride: true)
+    await failing.refresh()
+    #expect(failing.state == .error)
+    #expect(failing.targetRPMs.isEmpty)
+  }
+
+  @Test("partial manual-mode loss restores the whole fan group")
+  @MainActor
+  func partialOwnershipLossRestoresAllFans() async {
+    let hardware = MockFanHardware()
+    hardware.temperature = 80
+    hardware.targets = hardware.actual
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences(), controlEnabledOverride: true)
+    await controller.refresh()
+    #expect(controller.state == .manual)
+
+    hardware.modes[0] = 0
+    await controller.refresh()
+
+    #expect(controller.state == .automatic)
+    #expect(hardware.modes == [0, 0])
+    #expect(controller.statusText.contains("控制权不一致"))
+  }
+
+  @Test("complete ownership loss yields to macOS for the current cycle")
+  @MainActor
+  func completeOwnershipLossYields() async {
+    let hardware = MockFanHardware()
+    hardware.temperature = 80
+    hardware.targets = hardware.actual
+    let controller = FanController(
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences(), controlEnabledOverride: true)
+    await controller.refresh()
+    #expect(controller.state == .manual)
+
+    hardware.modes = [0, 0]
+    hardware.targets = [5_000, 5_100]
+    hardware.actual = hardware.targets
+    await controller.refresh()
+
+    #expect(controller.state == .automatic)
+    #expect(hardware.modes == [0, 0])
+    #expect(controller.statusText.contains("不再争抢"))
+  }
+}
+
 @Suite("Menu bar display preferences")
 struct MenuBarDisplayModeTests {
   @Test("sampling choices remain bounded and describe their response tradeoff")
@@ -322,7 +512,8 @@ struct MenuBarDisplayModeTests {
     hardware.count = 0
     hardware.sensorReadings = [TemperatureReading(key: "TB0T", value: 34)]
     let controller = FanController(
-      service: FanService(hardware: hardware), pollInterval: 3_600)
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences())
     controller.setMenuBarDisplayMode(.temperature)
 
     await controller.refresh()
@@ -395,7 +586,8 @@ struct MenuBarDisplayModeTests {
       isExternalPowerConnected: false, isBatteryCharging: false, inputCapacityWatts: nil,
       systemPowerWatts: 24.5, batteryChargingPowerWatts: nil)
     let controller = FanController(
-      service: FanService(hardware: hardware), pollInterval: 3_600)
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences())
 
     await controller.refresh()
     #expect(controller.menuBarPowerConnectionText == nil)
@@ -477,7 +669,8 @@ struct MenuBarDisplayModeTests {
       isExternalPowerConnected: true, isBatteryCharging: false, batteryLevelPercent: 80,
       inputCapacityWatts: 67, systemPowerWatts: 20, batteryChargingPowerWatts: nil)
     let controller = FanController(
-      service: FanService(hardware: hardware), pollInterval: 3_600)
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences())
     controller.setMenuBarDisplayMode(.temperatureAndBattery)
     controller.setBatteryMenuBarStyle(.macOSColored)
     controller.setShowsBatteryPercentageInMenuBar(true)
@@ -504,7 +697,8 @@ struct MenuBarDisplayModeTests {
       isExternalPowerConnected: false, isBatteryCharging: false, batteryLevelPercent: 63,
       inputCapacityWatts: nil, systemPowerWatts: 12, batteryChargingPowerWatts: nil)
     let controller = FanController(
-      service: FanService(hardware: hardware), pollInterval: 3_600)
+      service: FanService(hardware: hardware), pollInterval: 3_600,
+      preferences: testPreferences())
     await controller.refresh()
     controller.setMenuBarDisplayMode(.battery)
     #expect(controller.menuBarText == "63%")
@@ -648,6 +842,50 @@ struct FanServiceTests {
     #expect(!manual)
   }
 
+  @Test("apply reasserts manual mode if macOS resets it after sampling")
+  func applyReassertsLostMode() async throws {
+    let hardware = MockFanHardware()
+    let service = FanService(hardware: hardware)
+    let snapshot = try await service.prepare()
+    try await service.apply(targets: [4_000, 4_100], snapshot: snapshot)
+    let manualSnapshot = try await service.sample()
+    hardware.modes = [0, 0]
+
+    try await service.apply(targets: [4_200, 4_300], snapshot: manualSnapshot)
+
+    #expect(hardware.modes == [1, 1])
+    #expect(hardware.targets == [4_200, 4_300])
+  }
+
+  @Test("manual ownership reconciliation distinguishes full and partial loss")
+  func ownershipReconciliation() async throws {
+    let hardware = MockFanHardware()
+    let service = FanService(hardware: hardware)
+    let snapshot = try await service.prepare()
+    try await service.apply(targets: [4_000, 4_100], snapshot: snapshot)
+
+    hardware.modes = [0, 1]
+    let partialSnapshot = try await service.sample()
+    #expect(await service.reconcileManualControl(snapshot: partialSnapshot) == .partial)
+    #expect(await service.isManual())
+
+    hardware.modes = [0, 0]
+    let lostSnapshot = try await service.sample()
+    #expect(await service.reconcileManualControl(snapshot: lostSnapshot) == .lost)
+    #expect(!(await service.isManual()))
+  }
+
+  @Test("unowned manual modes are treated as external control")
+  func externalManualControlIsNotClaimed() async throws {
+    let hardware = MockFanHardware()
+    hardware.modes = [1, 1]
+    let service = FanService(hardware: hardware)
+    let snapshot = try await service.prepare()
+
+    #expect(await service.reconcileManualControl(snapshot: snapshot) == .external)
+    #expect(!(await service.isManual()))
+  }
+
   @Test("invalid hardware RPM range is rejected")
   func invalidRangeIsRejected() async {
     let hardware = MockFanHardware()
@@ -682,7 +920,8 @@ struct FanServiceTests {
     let snapshot = try await service.prepare()
     try await service.apply(targets: [4_000, 4_100], snapshot: snapshot)
     hardware.overrideActive = true
-    let controller = FanController(service: service, pollInterval: 3_600)
+    let controller = FanController(
+      service: service, pollInterval: 3_600, preferences: testPreferences())
 
     let restored = await controller.shutdown()
 

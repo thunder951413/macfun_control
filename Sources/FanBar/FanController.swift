@@ -88,23 +88,20 @@ final class FanController: ObservableObject {
   private static let batteryChargeLimitEnabledKey = "batteryChargeLimitEnabled"
   private static let batteryChargeLimitPercentKey = "batteryChargeLimitPercent"
   private let service: FanService
-  private let policy: FanSafetyPolicy
-  private let batteryPolicy: BatteryFanPolicy
-  private let slewLimiter: FanTargetSlewLimiter
+  private let preferences: UserDefaults
+  private var controlLoop: FanControlLoop
   private let pollIntervalOverride: TimeInterval?
   private var timer: Timer?
   private var isRefreshing = false
   private var hasStarted = false
   private var isSuspended = false
   private var needsRecovery: Bool
-  private var consecutiveCoolSamples = 0
   private var temperatureFilter = TemperatureSafetyFilter()
   private var batteryTemperatureFilter = TemperatureSafetyFilter(capacity: 3)
   private var dashboardRefreshCountdown = 0
   private var didConfigureHelperForCapability = false
   private var previousExternalPowerConnected: Bool?
   private var powerConnectionNoticeTask: Task<Void, Never>?
-  private var capturedSystemFloorRPMs: [Double] = []
 
   init(
     service: FanService = FanService(),
@@ -113,17 +110,19 @@ final class FanController: ObservableObject {
     slewLimiter: FanTargetSlewLimiter = FanTargetSlewLimiter(),
     pollInterval: TimeInterval = 0,
     helperManager: PrivilegedHelperManager = PrivilegedHelperManager(),
-    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager()
+    launchAtLoginManager: LaunchAtLoginManager = LaunchAtLoginManager(),
+    preferences: UserDefaults = .standard,
+    controlEnabledOverride: Bool? = nil
   ) {
     self.service = service
-    self.policy = policy
-    self.batteryPolicy = batteryPolicy
-    self.slewLimiter = slewLimiter
+    self.preferences = preferences
+    controlLoop = FanControlLoop(
+      cpuPolicy: policy, batteryPolicy: batteryPolicy, slewLimiter: slewLimiter)
     pollIntervalOverride = pollInterval > 0 ? pollInterval : nil
     self.helperManager = helperManager
     self.launchAtLoginManager = launchAtLoginManager
 
-    let defaults = UserDefaults.standard
+    let defaults = preferences
     let savedThreshold = defaults.object(forKey: Self.thresholdKey) as? Double
     thresholdCelsius = min(
       max(
@@ -133,8 +132,8 @@ final class FanController: ObservableObject {
     // Upgrades retain the prior user's intent. Fresh installs start in
     // monitor-only mode until the user explicitly enables hardware writes.
     isControlEnabled =
-      (defaults.object(forKey: Self.enabledKey) as? Bool ?? false)
-      && helperManager.isReady
+      controlEnabledOverride
+      ?? ((defaults.object(forKey: Self.enabledKey) as? Bool ?? false) && helperManager.isReady)
     needsRecovery = defaults.bool(forKey: Self.activeSessionKey)
     menuBarDisplayMode =
       MenuBarDisplayMode(
@@ -343,7 +342,7 @@ final class FanController: ObservableObject {
 
   var curvePercent: Int? {
     guard let currentTemperature,
-      let fraction = policy.curveFraction(
+      let fraction = controlLoop.cpuCurveFraction(
         temperature: currentTemperature, threshold: thresholdCelsius,
         accelerationFactor: fanAccelerationFactor)
     else { return nil }
@@ -352,7 +351,7 @@ final class FanController: ObservableObject {
 
   var batteryCurvePercent: Int? {
     guard let currentBatteryTemperature,
-      let fraction = batteryPolicy.curveFraction(
+      let fraction = controlLoop.batteryCurveFraction(
         temperature: currentBatteryTemperature, threshold: batteryCurveThreshold,
         accelerationFactor: fanAccelerationFactor)
     else { return nil }
@@ -367,33 +366,37 @@ final class FanController: ObservableObject {
 
   func setMenuBarDisplayMode(_ mode: MenuBarDisplayMode) {
     menuBarDisplayMode = mode
-    UserDefaults.standard.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
+    preferences.set(mode.rawValue, forKey: Self.menuBarDisplayKey)
   }
 
   func setBatteryMenuBarStyle(_ style: BatteryMenuBarStyle) {
     batteryMenuBarStyle = style
     if style.embedsPercentage { showsBatteryIconInMenuBar = true }
-    UserDefaults.standard.set(style.rawValue, forKey: Self.batteryMenuBarStyleKey)
-    UserDefaults.standard.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
+    preferences.set(style.rawValue, forKey: Self.batteryMenuBarStyleKey)
+    preferences.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
   }
 
   func setShowsBatteryIconInMenuBar(_ enabled: Bool) {
     showsBatteryIconInMenuBar = batteryMenuBarStyle.embedsPercentage ? true : enabled
     if !showsBatteryIconInMenuBar && !showsBatteryPercentageInMenuBar {
       showsBatteryPercentageInMenuBar = true
-      UserDefaults.standard.set(true, forKey: Self.batteryMenuBarPercentageKey)
+      preferences.set(true, forKey: Self.batteryMenuBarPercentageKey)
     }
-    UserDefaults.standard.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
+    preferences.set(showsBatteryIconInMenuBar, forKey: Self.batteryMenuBarIconKey)
   }
 
   func setShowsBatteryPercentageInMenuBar(_ enabled: Bool) {
-    guard !batteryMenuBarStyle.embedsPercentage else { return }
+    if batteryMenuBarStyle.embedsPercentage {
+      showsBatteryIconInMenuBar = true
+      preferences.set(true, forKey: Self.batteryMenuBarIconKey)
+      return
+    }
     showsBatteryPercentageInMenuBar = enabled
     if !showsBatteryPercentageInMenuBar && !showsBatteryIconInMenuBar {
       showsBatteryIconInMenuBar = true
-      UserDefaults.standard.set(true, forKey: Self.batteryMenuBarIconKey)
+      preferences.set(true, forKey: Self.batteryMenuBarIconKey)
     }
-    UserDefaults.standard.set(
+    preferences.set(
       showsBatteryPercentageInMenuBar, forKey: Self.batteryMenuBarPercentageKey)
   }
 
@@ -415,25 +418,25 @@ final class FanController: ObservableObject {
 
   func setShowsHotspotMenuAlert(_ enabled: Bool) {
     showsHotspotMenuAlert = enabled
-    UserDefaults.standard.set(enabled, forKey: Self.hotspotMenuAlertKey)
+    preferences.set(enabled, forKey: Self.hotspotMenuAlertKey)
   }
 
   func setShowsBatteryMenuAlert(_ enabled: Bool) {
     showsBatteryMenuAlert = enabled
-    UserDefaults.standard.set(enabled, forKey: Self.batteryMenuAlertKey)
+    preferences.set(enabled, forKey: Self.batteryMenuAlertKey)
   }
 
   func setBatteryAlertThreshold(_ value: Double) {
     batteryAlertThreshold = min(
       max(value, BatteryTemperaturePreferences.alertRange.lowerBound),
       BatteryTemperaturePreferences.alertRange.upperBound)
-    UserDefaults.standard.set(batteryAlertThreshold, forKey: Self.batteryAlertThresholdKey)
+    preferences.set(batteryAlertThreshold, forKey: Self.batteryAlertThresholdKey)
   }
 
   func setBatteryCurveEnabled(_ enabled: Bool) {
     guard enabled != isBatteryCurveEnabled else { return }
     isBatteryCurveEnabled = enabled
-    UserDefaults.standard.set(enabled, forKey: Self.batteryCurveEnabledKey)
+    preferences.set(enabled, forKey: Self.batteryCurveEnabledKey)
     Task { await refresh() }
   }
 
@@ -441,12 +444,12 @@ final class FanController: ObservableObject {
     batteryCurveThreshold = min(
       max(value, BatteryFanPolicy.thresholdRange.lowerBound),
       BatteryFanPolicy.thresholdRange.upperBound)
-    UserDefaults.standard.set(batteryCurveThreshold, forKey: Self.batteryCurveThresholdKey)
+    preferences.set(batteryCurveThreshold, forKey: Self.batteryCurveThresholdKey)
   }
 
   func setFanAccelerationFactor(_ value: Double) {
     fanAccelerationFactor = FanAccelerationProfile.clamp(value)
-    UserDefaults.standard.set(fanAccelerationFactor, forKey: Self.fanAccelerationFactorKey)
+    preferences.set(fanAccelerationFactor, forKey: Self.fanAccelerationFactorKey)
     Task { await refresh() }
   }
 
@@ -458,14 +461,14 @@ final class FanController: ObservableObject {
     guard source != temperatureSource else { return }
     temperatureSource = source
     temperatureFilter.reset()
-    UserDefaults.standard.set(source.rawValue, forKey: Self.temperatureSourceKey)
+    preferences.set(source.rawValue, forKey: Self.temperatureSourceKey)
     Task { await refresh() }
   }
 
   func setSamplingIntervalOption(_ option: SamplingIntervalOption) {
     guard option != samplingIntervalOption else { return }
     samplingIntervalOption = option
-    UserDefaults.standard.set(option.rawValue, forKey: Self.samplingIntervalKey)
+    preferences.set(option.rawValue, forKey: Self.samplingIntervalKey)
     dashboardRefreshCountdown = 0
     guard pollIntervalOverride == nil else { return }
     if timer != nil {
@@ -482,13 +485,13 @@ final class FanController: ObservableObject {
 
   func setBatteryChargeLimitEnabled(_ enabled: Bool) {
     batteryChargeLimitEnabled = enabled
-    UserDefaults.standard.set(enabled, forKey: Self.batteryChargeLimitEnabledKey)
+    preferences.set(enabled, forKey: Self.batteryChargeLimitEnabledKey)
     Task { await applyBatteryChargeLimit() }
   }
 
   func setBatteryChargeLimitPercent(_ value: Int) {
     batteryChargeLimitPercent = min(100, max(80, value))
-    UserDefaults.standard.set(batteryChargeLimitPercent, forKey: Self.batteryChargeLimitPercentKey)
+    preferences.set(batteryChargeLimitPercent, forKey: Self.batteryChargeLimitPercentKey)
     guard batteryChargeLimitEnabled else { return }
     Task { await applyBatteryChargeLimit() }
   }
@@ -504,7 +507,7 @@ final class FanController: ObservableObject {
     thresholdCelsius = min(
       max(value, FanSafetyPolicy.thresholdRange.lowerBound),
       FanSafetyPolicy.thresholdRange.upperBound)
-    UserDefaults.standard.set(thresholdCelsius, forKey: Self.thresholdKey)
+    preferences.set(thresholdCelsius, forKey: Self.thresholdKey)
   }
 
   func setControlEnabled(_ enabled: Bool) {
@@ -520,7 +523,7 @@ final class FanController: ObservableObject {
       return
     }
     isControlEnabled = enabled
-    UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
+    preferences.set(enabled, forKey: Self.enabledKey)
     Task {
       if enabled {
         await refresh()
@@ -538,49 +541,16 @@ final class FanController: ObservableObject {
     defer { isRefreshing = false }
 
     do {
-      helperManager.refresh()
-      let rawSnapshot = try await service.sample(source: temperatureSource)
+      let cycle = try await sampleAndPublish()
       guard !isSuspended else { return }
-      let filteredTemperature = temperatureFilter.record(rawSnapshot.temperature)
-      let filteredBatteryTemperature = rawSnapshot.batteryTemperature.map {
-        batteryTemperatureFilter.record($0)
-      }
-      let snapshot = FanSnapshot(
-        temperature: filteredTemperature, hotspotTemperature: rawSnapshot.hotspotTemperature,
-        hotspotSource: rawSnapshot.hotspotSource,
-        batteryTemperature: filteredBatteryTemperature, batterySource: rawSnapshot.batterySource,
-        power: rawSnapshot.power, fans: rawSnapshot.fans)
-      currentTemperature = filteredTemperature
-      currentHotspotTemperature = rawSnapshot.hotspotTemperature
-      currentHotspotSource = rawSnapshot.hotspotSource
-      currentBatteryTemperature = filteredBatteryTemperature
-      currentBatterySource = rawSnapshot.batterySource
-      currentPower = rawSnapshot.power
-      updatePowerConnectionNotice(rawSnapshot.power)
-      fanReadings = rawSnapshot.fans
-      updateFanCapability(hasControllableFans: !rawSnapshot.fans.isEmpty)
-      if dashboardRefreshCountdown <= 0 {
-        if let dashboard = try? await service.temperatureDashboard() {
-          temperatureDashboard = dashboard
-        }
-        if let limitState = try? await service.batteryChargeLimitState() {
-          batteryChargeLimitState = limitState
-          if limitState.isSupported {
-            batteryChargeLimitEnabled = limitState.isEnabled
-            if let upper = limitState.upperPercent, (80...100).contains(upper) {
-              batteryChargeLimitPercent = upper
-            }
-          }
-        }
-        dashboardRefreshCountdown = 5
-      } else {
-        dashboardRefreshCountdown -= 1
-      }
-
       if needsRecovery {
         logger.notice("restore requested reason=unfinished-session")
         try await service.restoreAutomatic()
         setSessionActive(false)
+        targetRPMs = []
+        state = .automatic
+        statusText = "已恢复上次会话；风扇由 macOS 自动控制"
+        return
       }
 
       guard hasControllableFans else {
@@ -590,7 +560,31 @@ final class FanController: ObservableObject {
         return
       }
 
-      let currentlyManual = await service.isManual()
+      let integrity = await service.reconcileManualControl(snapshot: cycle.raw)
+      if integrity == .partial {
+        logger.error("manual ownership partially lost; restoring all fans")
+        try await service.restoreAutomatic()
+        setSessionActive(false)
+        targetRPMs = []
+        state = .automatic
+        statusText = "检测到风扇控制权不一致；已整组交还 macOS"
+        return
+      }
+      if integrity == .lost {
+        logger.notice("manual ownership lost to macOS; deferring takeover")
+        setSessionActive(false)
+        targetRPMs = []
+        state = .automatic
+        statusText = "macOS 已收回风扇控制；本周期不再争抢"
+        return
+      }
+      if integrity == .external {
+        targetRPMs = []
+        state = .automatic
+        statusText = "检测到其他进程正在控制风扇；FanBar 保持监控"
+        return
+      }
+      let currentlyManual = integrity == .intact
       guard isControlEnabled else {
         if currentlyManual {
           logger.notice("restore requested reason=control-disabled")
@@ -602,113 +596,168 @@ final class FanController: ObservableObject {
         return
       }
 
-      let wasManual = currentlyManual
-      if !wasManual {
-        capturedSystemFloorRPMs = snapshot.fans.map(\.activeTargetFloor)
-      }
-      let decisionSnapshot = snapshot.applyingSystemFloors(capturedSystemFloorRPMs)
+      let outcome = controlLoop.evaluate(
+        snapshot: cycle.filtered,
+        rawCPUTemperature: cycle.raw.temperature,
+        rawBatteryTemperature: cycle.raw.batteryTemperature,
+        configuration: controlConfiguration,
+        wasManual: currentlyManual,
+        previousTargets: targetRPMs)
+      try await applyControlOutcome(outcome, snapshot: cycle.raw)
+    } catch {
+      await handleControlCycleError(error)
+    }
+  }
 
-      // FanBar supplements macOS using the selected CPU source and, when
-      // explicitly enabled, the battery-area curve. Other sensors remain monitoring-only.
-      let cpuEmergency = rawSnapshot.temperature >= policy.emergencyTemperature
-      let batteryEmergency =
-        isBatteryCurveEnabled
-        && (rawSnapshot.batteryTemperature ?? 0) >= BatteryFanPolicy.maximumTemperature
-      let cpuDecision = policy.decision(
-        for: decisionSnapshot, threshold: thresholdCelsius, wasManual: wasManual,
-        emergencyOverride: cpuEmergency, accelerationFactor: fanAccelerationFactor)
-      let batteryDecision =
-        isBatteryCurveEnabled
-        ? batteryPolicy.decision(
-          temperature: decisionSnapshot.batteryTemperature, fans: decisionSnapshot.fans,
-          threshold: batteryCurveThreshold, wasManual: wasManual,
-          accelerationFactor: fanAccelerationFactor)
-        : .automatic
-      let combined = combine(cpu: cpuDecision, battery: batteryDecision)
-      switch combined.decision {
-      case .automatic:
-        if wasManual {
-          consecutiveCoolSamples += 1
-          logger.notice(
-            "cool sample temperature=\(snapshot.temperature, privacy: .public) count=\(self.consecutiveCoolSamples, privacy: .public)"
-          )
-          if consecutiveCoolSamples < 3 {
-            state = .manual
-            statusText = "正在确认温度已稳定下降，再交还 macOS 控制"
-            return
-          }
-          logger.notice("restore requested reason=stable-cooldown")
-          try await service.restoreAutomatic()
-          setSessionActive(false)
+  private struct ControlCycleSample {
+    let raw: FanSnapshot
+    let filtered: FanSnapshot
+  }
+
+  private var controlConfiguration: FanControlLoop.Configuration {
+    FanControlLoop.Configuration(
+      cpuThreshold: thresholdCelsius,
+      batteryCurveEnabled: isBatteryCurveEnabled,
+      batteryThreshold: batteryCurveThreshold,
+      accelerationFactor: fanAccelerationFactor,
+      interval: samplingInterval)
+  }
+
+  private func sampleAndPublish() async throws -> ControlCycleSample {
+    helperManager.refresh()
+    let raw = try await service.sample(source: temperatureSource)
+    let filteredTemperature = temperatureFilter.record(raw.temperature)
+    let filteredBatteryTemperature = raw.batteryTemperature.map {
+      batteryTemperatureFilter.record($0)
+    }
+    let filtered = FanSnapshot(
+      temperature: filteredTemperature,
+      hotspotTemperature: raw.hotspotTemperature,
+      hotspotSource: raw.hotspotSource,
+      batteryTemperature: filteredBatteryTemperature,
+      batterySource: raw.batterySource,
+      power: raw.power,
+      fans: raw.fans)
+
+    currentTemperature = filteredTemperature
+    currentHotspotTemperature = raw.hotspotTemperature
+    currentHotspotSource = raw.hotspotSource
+    currentBatteryTemperature = filteredBatteryTemperature
+    currentBatterySource = raw.batterySource
+    currentPower = raw.power
+    updatePowerConnectionNotice(raw.power)
+    fanReadings = raw.fans
+    updateFanCapability(hasControllableFans: !raw.fans.isEmpty)
+    await refreshSupplementaryTelemetryIfNeeded()
+    return ControlCycleSample(raw: raw, filtered: filtered)
+  }
+
+  private func refreshSupplementaryTelemetryIfNeeded() async {
+    guard dashboardRefreshCountdown <= 0 else {
+      dashboardRefreshCountdown -= 1
+      return
+    }
+    do {
+      temperatureDashboard = try await service.temperatureDashboard()
+    } catch {
+      logger.debug("dashboard refresh skipped: \(error.localizedDescription, privacy: .public)")
+    }
+    do {
+      let limitState = try await service.batteryChargeLimitState()
+      batteryChargeLimitState = limitState
+      if limitState.isSupported {
+        batteryChargeLimitEnabled = limitState.isEnabled
+        if let upper = limitState.upperPercent, (80...100).contains(upper) {
+          batteryChargeLimitPercent = upper
         }
-        consecutiveCoolSamples = 0
-        targetRPMs = []
-        state = .automatic
-        let curveIsAboveThreshold =
-          snapshot.temperature > thresholdCelsius
-          || (isBatteryCurveEnabled
-            && (snapshot.batteryTemperature ?? -.infinity) > batteryCurveThreshold)
-        statusText =
-          curveIsAboveThreshold
-          ? "macOS 当前目标已不低于曲线；保持系统控制"
-          : "低于设定温度；风扇由 macOS 自动控制"
-      case .manual(let targets):
-        consecutiveCoolSamples = 0
-        setSessionActive(true)
-        let limitedTargets = slewLimiter.limit(
-          desired: targets, previous: targetRPMs, fans: decisionSnapshot.fans,
-          interval: samplingInterval, bypass: cpuEmergency || batteryEmergency)
-        try await service.apply(targets: limitedTargets, snapshot: decisionSnapshot)
-        logger.notice(
-          "manual curve applied temperature=\(snapshot.temperature, privacy: .public) reported=\(String(describing: snapshot.fans.map(\.reportedTargetRPM)), privacy: .public) desired=\(String(describing: targets), privacy: .public) limited=\(String(describing: limitedTargets), privacy: .public)"
-        )
-        targetRPMs = limitedTargets
-        state = .manual
-        statusText =
-          if cpuEmergency {
-            "CPU 紧急散热：已请求最大转速"
-          } else if batteryEmergency {
-            "电池区域紧急散热：已请求最大转速"
-          } else if combined.batteryDominant {
-            "电池区域风扇曲线正在运行"
-          } else {
-            "CPU 智能风扇曲线正在运行"
-          }
       }
     } catch {
-      logger.error("control cycle failed: \(error.localizedDescription, privacy: .public)")
-      let hadManualControl = await service.isManual() || needsRecovery
-      let restoreError = await attemptSafetyRestore()
-      targetRPMs = []
-      if isPermissionDenied(error) {
-        isControlEnabled = false
-        UserDefaults.standard.set(false, forKey: Self.enabledKey)
-        if let restoreError {
-          state = .error
-          statusText = "macOS 拒绝风扇控制。警告：\(restoreError.localizedDescription)"
-        } else {
-          state = .monitoring
-          statusText = "此 Mac 不允许风扇控制；已切换为仅监控"
-        }
-      } else if isHelperUnavailable(error) {
-        isControlEnabled = false
-        UserDefaults.standard.set(false, forKey: Self.enabledKey)
-        state = .monitoring
-        statusText = "特权控制组件不可用；已切换为仅监控"
-      } else if let restoreError {
-        state = .error
-        statusText = "\(error.localizedDescription). ALERT: \(restoreError.localizedDescription)"
-      } else if hadManualControl {
-        state = .error
-        statusText = "\(error.localizedDescription). Restored system control."
-      } else {
-        state = .error
-        statusText = error.localizedDescription
-      }
-      logger.notice(
-        "control state=\(self.state.label, privacy: .public) status=\(self.statusText, privacy: .public)"
-      )
+      logger.debug("charge-limit refresh skipped: \(error.localizedDescription, privacy: .public)")
     }
+    dashboardRefreshCountdown = 5
+  }
+
+  private func applyControlOutcome(
+    _ outcome: FanControlLoop.Outcome, snapshot: FanSnapshot
+  ) async throws {
+    switch outcome {
+    case .automatic(let curveAboveThreshold):
+      targetRPMs = []
+      state = .automatic
+      statusText =
+        curveAboveThreshold
+        ? "macOS 当前目标已不低于曲线；保持系统控制"
+        : "低于设定温度；风扇由 macOS 自动控制"
+
+    case .confirmingCooldown(let sampleCount):
+      logger.notice(
+        "cool sample temperature=\(snapshot.temperature, privacy: .public) count=\(sampleCount, privacy: .public)"
+      )
+      state = .manual
+      statusText = "正在确认温度已稳定下降，再交还 macOS 控制"
+
+    case .releaseToAutomatic:
+      logger.notice("restore requested reason=stable-cooldown")
+      try await service.restoreAutomatic()
+      setSessionActive(false)
+      targetRPMs = []
+      state = .automatic
+      statusText = "低于设定温度；风扇由 macOS 自动控制"
+
+    case .manual(let command):
+      setSessionActive(true)
+      try await service.apply(targets: command.limitedTargets, snapshot: snapshot)
+      logger.notice(
+        "manual curve applied temperature=\(snapshot.temperature, privacy: .public) systemFloors=\(String(describing: self.controlLoop.capturedSystemFloors), privacy: .public) desired=\(String(describing: command.desiredTargets), privacy: .public) limited=\(String(describing: command.limitedTargets), privacy: .public)"
+      )
+      targetRPMs = command.limitedTargets
+      state = .manual
+      statusText =
+        if command.cpuEmergency {
+          "CPU 紧急散热：已请求最大转速"
+        } else if command.batteryEmergency {
+          "电池区域紧急散热：已请求最大转速"
+        } else if command.batteryDominant {
+          "电池区域风扇曲线正在运行"
+        } else {
+          "CPU 智能风扇曲线正在运行"
+        }
+    }
+  }
+
+  private func handleControlCycleError(_ error: Error) async {
+    logger.error("control cycle failed: \(error.localizedDescription, privacy: .public)")
+    let hadManualControl = await service.isManual() || needsRecovery
+    let restoreError = await attemptSafetyRestore()
+    targetRPMs = []
+    if isPermissionDenied(error) {
+      isControlEnabled = false
+      preferences.set(false, forKey: Self.enabledKey)
+      if let restoreError {
+        state = .error
+        statusText = "macOS 拒绝风扇控制。警告：\(restoreError.localizedDescription)"
+      } else {
+        state = .monitoring
+        statusText = "此 Mac 不允许风扇控制；已切换为仅监控"
+      }
+    } else if isHelperUnavailable(error) {
+      isControlEnabled = false
+      preferences.set(false, forKey: Self.enabledKey)
+      state = .monitoring
+      statusText = "特权控制组件不可用；已切换为仅监控"
+    } else if let restoreError {
+      state = .error
+      statusText = "\(error.localizedDescription). ALERT: \(restoreError.localizedDescription)"
+    } else if hadManualControl {
+      state = .error
+      statusText = "\(error.localizedDescription). Restored system control."
+    } else {
+      state = .error
+      statusText = error.localizedDescription
+    }
+    logger.notice(
+      "control state=\(self.state.label, privacy: .public) status=\(self.statusText, privacy: .public)"
+    )
   }
 
   func suspend() async {
@@ -793,9 +842,9 @@ final class FanController: ObservableObject {
     // The current process tracks live ownership through FanService.manualFans.
     if !active {
       needsRecovery = false
-      capturedSystemFloorRPMs = []
+      controlLoop.reset()
     }
-    UserDefaults.standard.set(active, forKey: Self.activeSessionKey)
+    preferences.set(active, forKey: Self.activeSessionKey)
   }
 
   private func isPermissionDenied(_ error: Error) -> Bool {
@@ -804,23 +853,6 @@ final class FanController: ObservableObject {
 
   private func isHelperUnavailable(_ error: Error) -> Bool {
     (error as? FanBarHelperError)?.isConnectionFailure == true
-  }
-
-  private func combine(
-    cpu: FanSafetyPolicy.Decision, battery: FanSafetyPolicy.Decision
-  ) -> (decision: FanSafetyPolicy.Decision, batteryDominant: Bool) {
-    switch (cpu, battery) {
-    case (.automatic, .automatic):
-      return (.automatic, false)
-    case (.manual(let targets), .automatic):
-      return (.manual(targets), false)
-    case (.automatic, .manual(let targets)):
-      return (.manual(targets), true)
-    case (.manual(let cpuTargets), .manual(let batteryTargets)):
-      let combinedTargets = zip(cpuTargets, batteryTargets).map(max)
-      let batteryDominant = zip(cpuTargets, batteryTargets).contains { $1 > $0 }
-      return (.manual(combinedTargets), batteryDominant)
-    }
   }
 
   private func updateFanCapability(hasControllableFans: Bool) {

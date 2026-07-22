@@ -296,41 +296,46 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   private let writeKeyCommand: UInt8 = 6
   private let readIndexCommand: UInt8 = 8
   private let getKeyInfoCommand: UInt8 = 9
+  private let stateLock = NSRecursiveLock()
   private var connection: io_connect_t = 0
   private var modeKeyFormat: String?
   private var hasForceTestKey = false
   private var cachedKeys: [String]?
 
-  public var isOpen: Bool { connection != 0 }
+  public var isOpen: Bool { synchronized { connection != 0 } }
 
   public init() {}
 
   deinit { close() }
 
   public func open() throws {
-    guard connection == 0 else { return }
-    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-    guard service != 0 else { throw SMCError.serviceNotFound }
-    defer { IOObjectRelease(service) }
+    try synchronized {
+      guard connection == 0 else { return }
+      let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
+      guard service != 0 else { throw SMCError.serviceNotFound }
+      defer { IOObjectRelease(service) }
 
-    var newConnection: io_connect_t = 0
-    let result = IOServiceOpen(service, fanbar_mach_task_self(), 0, &newConnection)
-    guard result == kIOReturnSuccess else { throw SMCError.connectionFailed(result) }
-    connection = newConnection
+      var newConnection: io_connect_t = 0
+      let result = IOServiceOpen(service, fanbar_mach_task_self(), 0, &newConnection)
+      guard result == kIOReturnSuccess else { throw SMCError.connectionFailed(result) }
+      connection = newConnection
 
-    modeKeyFormat = ["F%dmd", "F%dMd"].first { format in
-      (try? readKey(String(format: format, 0))) != nil
+      modeKeyFormat = ["F%dmd", "F%dMd"].first { format in
+        (try? readKey(String(format: format, 0))) != nil
+      }
+      hasForceTestKey = (try? readKey("Ftst")) != nil
     }
-    hasForceTestKey = (try? readKey("Ftst")) != nil
   }
 
   public func close() {
-    guard connection != 0 else { return }
-    IOServiceClose(connection)
-    connection = 0
-    modeKeyFormat = nil
-    hasForceTestKey = false
-    cachedKeys = nil
+    synchronized {
+      guard connection != 0 else { return }
+      IOServiceClose(connection)
+      connection = 0
+      modeKeyFormat = nil
+      hasForceTestKey = false
+      cachedKeys = nil
+    }
   }
 
   public func fanCount() throws -> Int {
@@ -526,29 +531,31 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   public func setManualMode(fan index: Int) throws {
-    let key = modeKey(fan: index)
-    do {
-      try writeUInt8(key, value: 1)
-      guard try fanMode(fan: index) == 1 else { throw SMCError.manualModeTimeout(index) }
-      return
-    } catch {
-      guard hasForceTestKey else { throw error }
-    }
-
-    try writeUInt8("Ftst", value: 1)
-    Thread.sleep(forTimeInterval: 0.5)
-    let deadline = Date().addingTimeInterval(15)
-    repeat {
+    try synchronized {
+      let key = modeKey(fan: index)
       do {
         try writeUInt8(key, value: 1)
-        if try fanMode(fan: index) == 1 { return }
+        guard try fanMode(fan: index) == 1 else { throw SMCError.manualModeTimeout(index) }
+        return
       } catch {
-        // thermalmonitord may reject mode writes until it yields control.
+        guard hasForceTestKey else { throw error }
       }
-      Thread.sleep(forTimeInterval: 0.1)
-    } while Date() < deadline
 
-    throw SMCError.manualModeTimeout(index)
+      try writeUInt8("Ftst", value: 1)
+      Thread.sleep(forTimeInterval: 0.5)
+      let deadline = Date().addingTimeInterval(15)
+      repeat {
+        do {
+          try writeUInt8(key, value: 1)
+          if try fanMode(fan: index) == 1 { return }
+        } catch {
+          // thermalmonitord may reject mode writes until it yields control.
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+      } while Date() < deadline
+
+      throw SMCError.manualModeTimeout(index)
+    }
   }
 
   public func setTargetRPM(_ rpm: Double, fan index: Int) throws {
@@ -565,69 +572,75 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   public func setAutomaticMode(fan index: Int) throws {
-    let key = modeKey(fan: index)
-    let currentMode = try fanMode(fan: index)
-    guard currentMode != 0, currentMode != 3 else { return }
-    do {
-      try writeUInt8(key, value: 0)
-    } catch {
-      guard hasForceTestKey else { throw error }
-      // Recovery for a crashed/interrupted session where the fan remained in
-      // manual mode after Ftst had already returned to zero.
-      try writeUInt8("Ftst", value: 1)
-      Thread.sleep(forTimeInterval: 0.5)
-      // If firmware continues rejecting the mode transition, never leave a
-      // stranded manual fan with a stale low target while system ownership is
-      // being reclaimed.
-      if let maximum = try? fanMaximumRPM(fan: index) {
-        try? writeNumeric("F\(index)Tg", value: maximum)
-      }
-      let unlockDeadline = Date().addingTimeInterval(15)
-      var wroteAutomatic = false
-      repeat {
-        do {
-          try writeUInt8(key, value: 0)
-          wroteAutomatic = true
-          break
-        } catch {
-          Thread.sleep(forTimeInterval: 0.1)
+    try synchronized {
+      let key = modeKey(fan: index)
+      let currentMode = try fanMode(fan: index)
+      guard currentMode != 0, currentMode != 3 else { return }
+      do {
+        try writeUInt8(key, value: 0)
+      } catch {
+        guard hasForceTestKey else { throw error }
+        // Recovery for a crashed/interrupted session where the fan remained in
+        // manual mode after Ftst had already returned to zero.
+        try writeUInt8("Ftst", value: 1)
+        Thread.sleep(forTimeInterval: 0.5)
+        // If firmware continues rejecting the mode transition, never leave a
+        // stranded manual fan with a stale low target while system ownership is
+        // being reclaimed.
+        if let maximum = try? fanMaximumRPM(fan: index) {
+          try? writeNumeric("F\(index)Tg", value: maximum)
         }
-      } while Date() < unlockDeadline
-      // Some Apple Silicon firmware rejects F?Md=0 but still returns control
-      // after Ftst is cleared. The caller clears Ftst after processing all fans.
-      if !wroteAutomatic { return }
-    }
+        let unlockDeadline = Date().addingTimeInterval(15)
+        var wroteAutomatic = false
+        repeat {
+          do {
+            try writeUInt8(key, value: 0)
+            wroteAutomatic = true
+            break
+          } catch {
+            Thread.sleep(forTimeInterval: 0.1)
+          }
+        } while Date() < unlockDeadline
+        // Some Apple Silicon firmware rejects F?Md=0 but still returns control
+        // after Ftst is cleared. The caller clears Ftst after processing all fans.
+        if !wroteAutomatic { return }
+      }
 
-    let deadline = Date().addingTimeInterval(6)
-    var mode = try fanMode(fan: index)
-    while mode != 0, mode != 3, Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.1)
-      mode = try fanMode(fan: index)
-    }
-    guard mode == 0 || mode == 3 else {
-      throw SMCError.verificationFailed(key, expected: 0, actual: Double(mode))
+      let deadline = Date().addingTimeInterval(6)
+      var mode = try fanMode(fan: index)
+      while mode != 0, mode != 3, Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.1)
+        mode = try fanMode(fan: index)
+      }
+      guard mode == 0 || mode == 3 else {
+        throw SMCError.verificationFailed(key, expected: 0, actual: Double(mode))
+      }
     }
   }
 
   public func controlOverrideActive() throws -> Bool {
-    guard hasForceTestKey else { return false }
-    return try readUInt8("Ftst") != 0
+    try synchronized {
+      guard hasForceTestKey else { return false }
+      return try readUInt8("Ftst") != 0
+    }
   }
 
   public func resetControlOverride() throws {
-    guard try controlOverrideActive() else { return }
-    try writeUInt8("Ftst", value: 0)
-    let deadline = Date().addingTimeInterval(6)
-    while try controlOverrideActive(), Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.2)
-    }
-    guard try !controlOverrideActive() else {
-      throw SMCError.verificationFailed("Ftst", expected: 0, actual: 1)
+    try synchronized {
+      guard try controlOverrideActive() else { return }
+      try writeUInt8("Ftst", value: 0)
+      let deadline = Date().addingTimeInterval(6)
+      while try controlOverrideActive(), Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.2)
+      }
+      guard try !controlOverrideActive() else {
+        throw SMCError.verificationFailed("Ftst", expected: 0, actual: 1)
+      }
     }
   }
 
   private func modeKey(fan index: Int) -> String {
-    String(format: modeKeyFormat ?? "F%dMd", index)
+    synchronized { String(format: modeKeyFormat ?? "F%dMd", index) }
   }
 
   private func readRPM(_ key: String) throws -> Double {
@@ -735,26 +748,28 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   private func allKeys() throws -> [String] {
-    if let cachedKeys { return cachedKeys }
-    let countData = try readKey("#KEY")
-    guard countData.bytes.count >= 4 else { throw SMCError.invalidValue("#KEY") }
-    let count =
-      UInt32(countData.bytes[0]) << 24 | UInt32(countData.bytes[1]) << 16
-      | UInt32(countData.bytes[2]) << 8 | UInt32(countData.bytes[3])
-    guard (1...20_000).contains(count) else { throw SMCError.invalidValue("#KEY") }
+    try synchronized {
+      if let cachedKeys { return cachedKeys }
+      let countData = try readKey("#KEY")
+      guard countData.bytes.count >= 4 else { throw SMCError.invalidValue("#KEY") }
+      let count =
+        UInt32(countData.bytes[0]) << 24 | UInt32(countData.bytes[1]) << 16
+        | UInt32(countData.bytes[2]) << 8 | UInt32(countData.bytes[3])
+      guard (1...20_000).contains(count) else { throw SMCError.invalidValue("#KEY") }
 
-    var keys: [String] = []
-    keys.reserveCapacity(Int(count))
-    for index in 0..<count {
-      var input = SMCKeyData()
-      input.data8 = readIndexCommand
-      input.data32 = index
-      let output = try call("index \(index)", input: input)
-      let key = fourCharString(output.key)
-      if key.utf8.count == 4 { keys.append(key) }
+      var keys: [String] = []
+      keys.reserveCapacity(Int(count))
+      for index in 0..<count {
+        var input = SMCKeyData()
+        input.data8 = readIndexCommand
+        input.data32 = index
+        let output = try call("index \(index)", input: input)
+        let key = fourCharString(output.key)
+        if key.utf8.count == 4 { keys.append(key) }
+      }
+      cachedKeys = keys
+      return keys
     }
-    cachedKeys = keys
-    return keys
   }
 
   private func writeKey(_ key: String, bytes: [UInt8], knownInfo: (type: String, size: Int)? = nil)
@@ -771,18 +786,26 @@ public final class SMCClient: FanHardware, @unchecked Sendable {
   }
 
   private func call(_ key: String, input: SMCKeyData) throws -> SMCKeyData {
-    guard connection != 0 else { throw SMCError.notOpen }
-    precondition(MemoryLayout<SMCKeyData>.stride == 80, "AppleSMC ABI layout changed")
-    var input = input
-    var output = SMCKeyData()
-    var outputSize = MemoryLayout<SMCKeyData>.stride
-    let result = IOConnectCallStructMethod(
-      connection, handleYPCEvent, &input, MemoryLayout<SMCKeyData>.stride, &output, &outputSize
-    )
-    guard result == kIOReturnSuccess else { throw SMCError.callFailed(key, result) }
-    guard outputSize >= 44 else { throw SMCError.invalidValue(key) }
-    guard output.result == 0 else { throw SMCError.firmwareError(key, output.result) }
-    return output
+    try synchronized {
+      guard connection != 0 else { throw SMCError.notOpen }
+      precondition(MemoryLayout<SMCKeyData>.stride == 80, "AppleSMC ABI layout changed")
+      var input = input
+      var output = SMCKeyData()
+      var outputSize = MemoryLayout<SMCKeyData>.stride
+      let result = IOConnectCallStructMethod(
+        connection, handleYPCEvent, &input, MemoryLayout<SMCKeyData>.stride, &output, &outputSize
+      )
+      guard result == kIOReturnSuccess else { throw SMCError.callFailed(key, result) }
+      guard outputSize >= 44 else { throw SMCError.invalidValue(key) }
+      guard output.result == 0 else { throw SMCError.firmwareError(key, output.result) }
+      return output
+    }
+  }
+
+  private func synchronized<T>(_ body: () throws -> T) rethrows -> T {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return try body()
   }
 
   private func fourCharCode(_ string: String) throws -> UInt32 {

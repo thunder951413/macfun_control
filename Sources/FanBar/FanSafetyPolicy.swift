@@ -20,24 +20,34 @@ struct FanReading: Sendable, Equatable, Identifiable {
   let index: Int
   let actualRPM: Double
   let reportedTargetRPM: Double?
+  let mode: UInt8?
   let minimumRPM: Double
   let maximumRPM: Double
 
   var id: Int { index }
 
   init(
-    index: Int, actualRPM: Double, reportedTargetRPM: Double? = nil, minimumRPM: Double,
-    maximumRPM: Double
+    index: Int, actualRPM: Double, reportedTargetRPM: Double? = nil, mode: UInt8? = nil,
+    minimumRPM: Double, maximumRPM: Double
   ) {
     self.index = index
     self.actualRPM = actualRPM
     self.reportedTargetRPM = reportedTargetRPM
+    self.mode = mode
     self.minimumRPM = minimumRPM
     self.maximumRPM = maximumRPM
   }
 
   var activeTargetFloor: Double {
     max(actualRPM, reportedTargetRPM ?? actualRPM)
+  }
+
+  var systemTargetFloor: Double {
+    min(maximumRPM, max(minimumRPM, reportedTargetRPM ?? minimumRPM))
+  }
+
+  func controlFloor(wasManual: Bool) -> Double {
+    wasManual ? systemTargetFloor : activeTargetFloor
   }
 }
 
@@ -76,6 +86,7 @@ extension FanSnapshot {
       FanReading(
         index: fan.index, actualRPM: fan.actualRPM,
         reportedTargetRPM: floors[index],
+        mode: fan.mode,
         minimumRPM: fan.minimumRPM, maximumRPM: fan.maximumRPM)
     }
     return FanSnapshot(
@@ -122,15 +133,16 @@ struct BatteryFanPolicy: Sendable {
     guard shouldBeManual else { return .automatic }
 
     let curveTargets = fans.map { fan in
+      let floor = fan.controlFloor(wasManual: wasManual)
       guard
         let progress = curveFraction(
           temperature: temperature, threshold: threshold,
           accelerationFactor: accelerationFactor)
       else {
-        return fan.activeTargetFloor
+        return floor
       }
       let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
-      return min(fan.maximumRPM, max(fan.activeTargetFloor, curveTarget))
+      return min(fan.maximumRPM, max(floor, curveTarget))
     }
     guard
       wasManual
@@ -179,14 +191,15 @@ struct FanTargetSlewLimiter: Sendable {
     let seconds = max(0, interval)
     return desired.enumerated().map { index, desiredTarget in
       let fan = fans[index]
+      let floor = fan.systemTargetFloor
       let baseline = max(
-        fan.activeTargetFloor,
+        floor,
         previous.indices.contains(index) ? previous[index] : fan.activeTargetFloor)
       let limited =
         desiredTarget >= baseline
         ? min(desiredTarget, baseline + increaseRPMPerSecond * seconds)
         : max(desiredTarget, baseline - decreaseRPMPerSecond * seconds)
-      return min(fan.maximumRPM, max(fan.activeTargetFloor, max(fan.minimumRPM, limited)))
+      return min(fan.maximumRPM, max(floor, max(fan.minimumRPM, limited)))
     }
   }
 }
@@ -242,17 +255,18 @@ struct FanSafetyPolicy: Sendable {
 
     let targets = snapshot.fans.map { fan in
       if emergency { return fan.maximumRPM }
+      let floor = fan.controlFloor(wasManual: wasManual)
       guard
         let progress = curveFraction(
           temperature: snapshot.temperature, threshold: threshold,
           accelerationFactor: accelerationFactor)
-      else { return fan.activeTargetFloor }
+      else { return floor }
       let curveTarget = fan.minimumRPM + (fan.maximumRPM - fan.minimumRPM) * progress
 
-      // F?Tg is macOS's requested target in automatic mode and FanBar's last
-      // target in manual mode. Keeping it as a floor both avoids overriding a
-      // higher system request on entry and makes a manual session monotonic.
-      return min(fan.maximumRPM, max(fan.activeTargetFloor, curveTarget))
+      // On entry, never lower the actual speed or macOS target. During an
+      // owned manual session, the captured macOS target remains the safety
+      // floor while the asymmetric slew limiter allows a gradual decrease.
+      return min(fan.maximumRPM, max(floor, curveTarget))
     }
     guard
       emergency || wasManual

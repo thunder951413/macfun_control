@@ -701,7 +701,7 @@ struct FanPopoverView: View {
       Image(systemName: "shield.checkered")
         .foregroundStyle(.green)
         .frame(width: 18)
-      Text("介入时记录 macOS 的目标下限；连续控制期间不会定时切回自动模式。目标不低于该下限或实际转速，异常时恢复系统控制。")
+      Text("介入时记录 macOS 的目标下限；首次接管不降低实际转速，之后按非对称限速平滑升降且不低于该下限。控制权异常时整组交还 macOS。")
         .fixedSize(horizontal: false, vertical: true)
     }
     .font(.caption)
